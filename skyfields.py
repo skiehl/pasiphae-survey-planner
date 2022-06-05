@@ -27,7 +27,7 @@ class Field:
     #--------------------------------------------------------------------------
     def __init__(
             self, fov, ra, dec, tilt=0., field_id=None,
-            latest_obs_window_jd=None):
+            latest_obs_window_jd=None, n_obs=0):
         """A field in the sky."""
 
         self.id = field_id
@@ -40,19 +40,45 @@ class Field:
         self.corners_ra = self.corners_coord.ra
         self.corners_dec = self.corners_coord.dec
         self.latest_obs_window_jd = latest_obs_window_jd
+        self.obs_windows = []
+        self.status = -1
+        self.setting_in = None
+        self.n_obs = n_obs
 
     #--------------------------------------------------------------------------
     def __str__(self):
 
-        return dedent("""\
+        info = dedent("""\
             Sky field {0:s}
             Field of view: {1:8.4f} arcmin
             Center RA:     {2:8.4f} deg
             Center Dec:    {3:+8.4f} deg
-            Tilt:          {4:+8.4f} deg""".format(
+            Tilt:          {4:+8.4f} deg
+            Status:        {5}
+            """.format(
                 f'{self.id}' if self.id is not None else '',
-                self.fov.arcmin, self.center_ra.deg,
-                self.center_dec.deg, self.tilt.deg))
+                self.fov.arcmin, self.center_ra.deg, self.center_dec.deg,
+                self.tilt.deg, self._status_to_str()))
+
+        return info
+
+    #--------------------------------------------------------------------------
+    def _status_to_str(self):
+        """TBD
+        """
+
+        if self.status == -1:
+            status_str = 'unknown/undefined'
+        elif self.status == 0:
+            status_str = 'not observable'
+        elif self.status == 1:
+            status_str = 'rising'
+        elif self.status == 2:
+            status_str = 'plateauing'
+        elif self.status == 3:
+            status_str = 'setting in {0}'.format(self.setting_in)
+
+        return status_str
 
     #--------------------------------------------------------------------------
     def _field_corners_init(self, fov):
@@ -249,6 +275,51 @@ class Field:
                 obs_windows.append((t_start, t_stop))
 
         return obs_windows
+
+    #--------------------------------------------------------------------------
+    def get_obs_duration(self):
+
+        duration = 0
+
+        for obs_window in self.obs_windows:
+            duration += obs_window.duration
+
+        return duration
+
+    #--------------------------------------------------------------------------
+    def add_obs_window(self, obs_window):
+        """Add observation window(s) to field.
+
+        Parameters
+        ----------
+        obs_window : ObsWindow or list
+            Observation window(s) that is/are added to the field. If multiple
+            windows should be added provide a list of ObsWindow instances.
+
+        Returns
+        -------
+        None.
+        """
+
+        if isinstance(obs_window, list):
+            self.obs_windows += obs_window
+        else:
+            self.obs_windows.append(obs_window)
+
+    #--------------------------------------------------------------------------
+    def set_status(
+            self, rising=None, plateauing=None, setting=None, setting_in=None,
+            not_available=None):
+
+        if not_available:
+            self.status = 0
+        elif rising:
+            self.status = 1
+        elif plateauing:
+            self.status = 2
+        elif setting:
+            self.status = 3
+            self.setting_in = setting_in
 
 #==============================================================================
 

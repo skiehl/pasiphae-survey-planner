@@ -3,6 +3,7 @@
 """Sky fields for the pasiphae survey.
 """
 
+from astropy.time import Time
 from astropy import units as u
 import os
 import sqlite3
@@ -59,17 +60,20 @@ class DBConnectorSQLite:
         self.db_file = db_file
 
     #--------------------------------------------------------------------------
-    def _connect(self):
-        """TODO"""
-
-        self.connection
+    #def _connect(self):
+    #    """TODO"""
+    #
+    #    self.connection
 
     #--------------------------------------------------------------------------
-    def _query(self, connection, query, commit=False):
+    def _query(self, connection, query, many=False, commit=False):
         """TODO"""
 
         cursor = connection.cursor()
-        result = cursor.execute(query)
+        if many is False:
+            result = cursor.execute(query)
+        else:
+            result = cursor.executemany(query, many)
 
         if commit:
             connection.commit()
@@ -409,7 +413,21 @@ class DBConnectorSQLite:
                 CREATE TABLE Observations(
                     observation_id integer PRIMARY KEY,
                     field_id integer,
+                    exposure float,
+                    repetitions int,
+                    filter_id int,
+                    scheduled bool,
+                    done bool,
                     date date)
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'Observations' created.")
+
+            # create Filters table:
+            query = """\
+                CREATE TABLE Filters(
+                    filter_id integer PRIMARY KEY,
+                    filter char(10))
                 """
             self._query(connection, query, commit=True)
             print("Table 'Observations' created.")
@@ -536,46 +554,50 @@ class DBConnectorSQLite:
             print(f'\r{n_fields} fields added to database.                   ')
 
     #--------------------------------------------------------------------------
-    def get_fields(self, observatory=None, active=True):
+    def get_fields(self, observatory=None, observed=None, active=True):
         """TODO"""
 
-        # TODO: add argument 'observed' to query fields that have or have not
-        # been observed
+        # set query condition for observed or not:
+        if observed is None:
+            condition_observed = ""
+        elif observed:
+            condition_observed =  " AND nobs > 0"
+        else:
+            condition_observed = " AND nobs is null"
 
+        # set query condition for observatory:
+        if observatory:
+            condition_observatory = " AND name = '{0}'".format(observatory)
+        else:
+            condition_observatory = ""
+
+        # query data base:
         with SQLiteConnection(self.db_file) as connection:
-
-            # no specified observatory:
-            if observatory is None:
-                query = """\
-                    SELECT field_id, fov, center_ra, center_dec, tilt, name,
-                        active, jd_next_obs_window
-                    FROM Fields AS f
-                    LEFT JOIN Observatories AS o
-                        ON f.observatory_id = o.observatory_id
-                    WHERE active = {0}
-                    """.format(active)
-                result = self._query(connection, query).fetchall()
-
-            # specified observatory:
-            else:
-                query = """\
-                    SELECT field_id, fov, center_ra, center_dec, tilt, name,
-                        active, jd_next_obs_window
-                    FROM Fields AS f
-                    LEFT JOIN Observatories AS o
-                        ON f.observatory_id = o.observatory_id
-                    WHERE (active = {0}
-                           AND name = '{1}');
-                    """.format(active, observatory)
-                result = self._query(connection, query).fetchall()
+            query = """\
+                SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
+                    f.tilt, o.name observatory, f.active,
+                    f.jd_next_obs_window, COALESCE(p.nobs, 0) nobs
+                FROM Fields AS f
+                LEFT JOIN Observatories AS o
+                    ON f.observatory_id = o.observatory_id
+                LEFT JOIN (
+                	SELECT field_id, COUNT(*) nobs
+                	FROM Observations
+                	GROUP BY field_id
+                	) AS p
+                ON f.field_id = p.field_id
+                WHERE (active = {0} {1} {2});
+                """.format(active, condition_observatory, condition_observed)
+            result = self._query(connection, query).fetchall()
 
         return result
 
     #--------------------------------------------------------------------------
-    def iter_fields(self, observatory=None, active=True):
+    def iter_fields(self, observatory=None, observed=None, active=True):
         """TODO"""
 
-        fields = self.get_fields(observatory=observatory, active=active)
+        fields = self.get_fields(
+                observatory=observatory, observed=observed, active=active)
         n = len(fields)
 
         for i, field in enumerate(fields):
@@ -644,7 +666,7 @@ class DBConnectorSQLite:
     def add_obs_window(self, field_id, date_start, date_stop, active=True):
         """TODO"""
 
-        duration = (date_stop - date_start).value / 24.
+        duration = (date_stop - date_start).value
 
         with SQLiteConnection(self.db_file) as connection:
             # add observatory to database:
@@ -668,5 +690,232 @@ class DBConnectorSQLite:
                 WHERE field_id={1};
                 """.format(jd, field_id)
             self._query(connection, query, commit=True)
+
+    #--------------------------------------------------------------------------
+    def get_obs_windows_from_to(self, field_id, date_start, date_stop):
+        """TODO"""
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """
+            SELECT * FROM ObsWindows
+            WHERE (field_id={0} AND
+                   date_start>'{1}' AND
+                   date_stop<'{2}')
+            """.format(field_id, date_start.iso, date_stop.iso)
+            obs_windows = self._query(connection, query).fetchall()
+
+        return obs_windows
+
+    #--------------------------------------------------------------------------
+    def get_obs_windows_by_datetime(self, field_id, datetime):
+        """TODO"""
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """
+            SELECT * FROM ObsWindows
+            WHERE (field_id={0} AND
+                   date_start<'{1}' AND
+                   date_stop>'{1}')
+            """.format(field_id, datetime.iso)
+            obs_windows = self._query(connection, query).fetchall()
+
+        return obs_windows
+
+    #--------------------------------------------------------------------------
+    def get_obs_window_durations(self, field_id, date_start, date_stop):
+        """TODO"""
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """
+            SELECT duration FROM ObsWindows
+            WHERE (field_id={0} AND
+                   date_start>'{1}' AND
+                   date_stop<'{2}')
+            """.format(field_id, date_start.iso, date_stop.iso)
+            durations = self._query(connection, query).fetchall()
+
+        return durations
+
+    #--------------------------------------------------------------------------
+    def _add_filter(self, filter_name):
+        """TODO"""
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO Filters (filter)
+                VALUES ('{0}')
+                """.format(filter_name)
+            self._query(connection, query, commit=True)
+            last_insert_id = self._last_insert_id(connection)
+
+        return last_insert_id
+
+    #--------------------------------------------------------------------------
+    def get_filter_id(self, filter_name):
+        """TODO"""
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT filter_id, filter
+                FROM Filters
+                WHERE filter='{0}';
+                """.format(filter_name)
+            results = self._query(connection, query).fetchall()
+
+        if len(results) == 0:
+            userin = input(
+                    f"Filter '{filter_name} does not exist. Add it to data " \
+                    "base? (y/n)")
+
+            if userin.lower() in ['y', 'yes', 'make it so!']:
+                filter_id = self._add_filter(filter_name)
+            else:
+                filter_id = False
+
+        else:
+            filter_id = results[0][0]
+
+        return filter_id
+
+    #--------------------------------------------------------------------------
+    def _add_observation(self, field_id, exposure, repetitions, filter_id):
+        """TODO"""
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO Observations (
+                    field_id, exposure, repetitions, filter_id)
+                VALUES ({0}, {1}, {2}, {3});
+                """.format(field_id, exposure, repetitions, filter_id)
+            self._query(connection, query, commit=True)
+
+    #--------------------------------------------------------------------------
+    def get_observations(self, field_id, exposure, repetitions, filter_id):
+        """TODO"""
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT *
+                FROM Observations
+                WHERE (
+                    field_id={0} AND exposure={1} AND repetitions={2}
+                    AND filter_id={3});
+                """.format(field_id, exposure, repetitions, filter_id)
+            results = self._query(connection, query).fetchall()
+
+        return results
+
+    #--------------------------------------------------------------------------
+    def add_observations(self, field_id, exposure, repetitions, filter_name):
+        """TODO"""
+
+        # prepare field_ids:
+        if isinstance(field_id, int):
+            field_id = [field_id]
+        elif isinstance(field_id, list):
+            pass
+        else:
+            raise ValueError("'field_id' needs to be int or list of int.")
+
+        n_fields = len(field_id)
+
+        # prepare exposures:
+        if type(exposure) in [float, int]:
+            exposure = float(exposure)
+            exposure = [exposure for __ in range(n_fields)]
+        elif isinstance(exposure, list):
+            if len(exposure) != n_fields:
+                raise ValueError(
+                        "'exposures' list need to be of the same length as " \
+                        "'field_id'.")
+        else:
+            raise ValueError("'exposure' needs to be float or list of floats.")
+
+        # prepare repetitions:
+        if isinstance(repetitions, int):
+            repetitions = [repetitions for __ in range(n_fields)]
+        elif isinstance(repetitions, list):
+            if len(repetitions) != n_fields:
+                raise ValueError(
+                        "'repetitions' list need to be of the same length " \
+                        "'as field_id'.")
+        else:
+            raise ValueError("'repetitions' needs to be int or list of int.")
+
+        # prepare filters:
+        if isinstance(filter_name, str):
+            filter_name = [filter_name for __ in range(n_fields)]
+        elif isinstance(filter_name, list):
+            if len(filter_name) != n_fields:
+                raise ValueError(
+                        "'filter_name' list need to be of the same length " \
+                        "'as field_id'.")
+        else:
+            raise ValueError("'filter_name' needs to be str or list of str.")
+
+        check_existence = True
+        skip_existing = False
+        filter_ids = {}
+        data = []
+
+        # prepare entries for adding:
+        for field, exp, rep, filt in zip(
+                field_id, exposure, repetitions, filter_name):
+            # check if filter exists:
+            if filt not in filter_ids.keys():
+                filter_id = self.get_filter_id(filt)
+
+                # stop, if the filter did not exist and was not added:
+                if filter_id is False:
+                    print("Filter was not added to database. No " \
+                          "observations are added either.")
+                    return False
+
+                filter_ids[filt] = filter_id
+
+            # check if observation entry exists:
+            if check_existence:
+                observations = self.get_observations(
+                        field, exp, rep, filter_ids[filt])
+                n_obs = len(observations)
+                n_done = len([1 for obs in observations if obs[6]])
+
+                if n_obs > n_done and skip_existing:
+                    continue
+                elif n_obs:
+                    userin = input(
+                            f"{n_obs} observation(s) with the same " \
+                            "parameters already exist in data base. " \
+                            f"{n_done} out of those are finished. Add new " \
+                            "observation anyway? (y/n, 'ALL' to add all " \
+                            "following without asking, or 'NONE' to skip " \
+                            "all existing observations that have not been " \
+                            "finished).")
+
+                    if userin.lower in ['y', 'yes', 'make it so!']:
+                        pass
+                    elif userin == 'ALL':
+                        check_existence = False
+                    elif userin == 'NONE':
+                        skip_existing = True
+                        continue
+                    else:
+                        continue
+
+            # add to data:
+            data.append((field, exp, rep, filter_ids[filt], False, False))
+
+        # add to data base:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO Observations (
+                    field_id, exposure, repetitions, filter_id, scheduled,
+                    done)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """
+            self._query(connection, query, many=data, commit=True)
+
+        n_obs = len(data)
+        print(f"{n_obs} observations added to data base.")
 
 #==============================================================================

@@ -7,7 +7,9 @@ from astropy.coordinates import AltAz, Angle, EarthLocation, get_sun
 from astropy.time import Time, TimeDelta
 from astropy import units as u
 import numpy as np
+from scipy.stats import linregress
 from textwrap import dedent
+from warnings import warn
 
 import constraints as c
 from db import DBConnectorSQLite
@@ -30,7 +32,7 @@ class ObsWindow:
     """Time window of observability."""
 
     #--------------------------------------------------------------------------
-    def __init__(self, start, stop):
+    def __init__(self, start, stop, obs_window_id=None):
         """Time window of observability.
 
         TODO"""
@@ -38,6 +40,7 @@ class ObsWindow:
         self.start = start
         self.stop = stop
         self.duration = (stop - start).value * u.day
+        self.obs_window_id = obs_window_id
 
     #--------------------------------------------------------------------------
     def __str__(self):
@@ -237,7 +240,7 @@ class SurveyPlanner:
         self.twilight = None
 
     #--------------------------------------------------------------------------
-    def _setup_observatory(self, observatory):
+    def _setup_observatory(self, observatory, no_constraints=False):
         """TBD
         """
 
@@ -249,6 +252,10 @@ class SurveyPlanner:
         self.telescope = Telescope(
                 telescope['lat'], telescope['lon'], telescope['height'],
                 telescope['utc_offset'], name=telescope['name'])
+
+        # skip loading constraints:
+        if no_constraints:
+            return None
 
         # read constraints:
         constraints = db.get_constraints(observatory)
@@ -277,19 +284,47 @@ class SurveyPlanner:
             self.telescope.add_constraint(constraint)
 
     #--------------------------------------------------------------------------
+    def _tuple_to_field(self, field_tuple):
+        """TBD
+        """
+
+        field_id, fov, center_ra, center_dec, tilt, __, __, \
+            latest_obs_window_jd, n_obs = field_tuple
+        field = Field(
+            fov, center_ra, center_dec, tilt, field_id=field_id,
+            latest_obs_window_jd=latest_obs_window_jd, n_obs=n_obs)
+
+        return field
+
+    #--------------------------------------------------------------------------
+    def _tuples_to_obs_windows(self, obs_windows_tuples):
+        """TBD
+        """
+
+        obs_windows = []
+
+        for obs_window_tuple in obs_windows_tuples:
+            obs_window_id, __, date_start, date_stop, __, __ = \
+                    obs_window_tuple
+            date_start = Time(date_start)
+            date_stop = Time(date_stop)
+            obs_window = ObsWindow(
+                    date_start, date_stop, obs_window_id=obs_window_id)
+            obs_windows.append(obs_window)
+
+        return obs_windows
+
+    #--------------------------------------------------------------------------
     def _iter_fields(self, observatory=None, active=None):
         """TBD
         """
 
         # read fields from database:
         db = DBConnectorSQLite(self.dbname)
-        fields = db.get_fields(observatory=observatory, active=active)
+        fields = db.iter_fields(observatory=observatory, active=active)
 
-        for (__, fov, center_ra, center_dec, tilt, __, field_id,
-                latest_obs_window_jd) in fields:
-            field = Field(
-                fov, center_ra, center_dec, tilt, field_id=field_id,
-                latest_obs_window_jd=latest_obs_window_jd)
+        for __, __, field in fields:
+            field = self._tuple_to_field(field)
 
             yield field
 
@@ -396,6 +431,188 @@ class SurveyPlanner:
                 db.update_next_obs_window(field_id, jd_stop)
 
             print(f'\rField {j+1} of {n} (100%)   ')
-        print(f'Calculating observing windows done.')
+        print('Calculating observing windows done.')
+
+    #--------------------------------------------------------------------------
+    def _set_field_status(self, field, date, days_before=3, days_after=7):
+        """TBD
+        """
+
+        # connect to database:
+        db = DBConnectorSQLite(self.dbname)
+
+        # get durations of the next N observing windows
+        date_start = date - days_before * u.d
+        date_stop = date + days_after * u.d
+        durations = db.get_obs_window_durations(
+                field.id, date_start, date_stop)
+        durations = np.array(durations).squeeze()
+
+        # start and end date:
+        date_start = date - days_before * u.d
+        date_stop = date + days_after * u.d
+
+        # check that obs windows are available for time range
+        if date_stop.jd > field.latest_obs_window_jd:
+            warn(f"Calculate observing windows until {date_stop.iso[:10]}.")
+
+        # get observing windows:
+        db = DBConnectorSQLite(self.dbname)
+        obs_windows = db.get_obs_windows_from_to(
+                field.id, date_start, date_stop)
+        obs_windows = self._tuples_to_obs_windows(obs_windows)
+        durations = [obs_window.duration.value for obs_window in obs_windows]
+        n_windows = len(durations)
+
+        # check status - not observable:
+        if n_windows == 0:
+            field.set_status(not_available=True)
+
+        # check status - unclear:
+        elif n_windows < 4:
+            pass
+
+        # check status - rising/plateauing/setting:
+        else:
+            x = np.arange(n_windows) # assuming daily calculated obs windows
+            x -= days_before
+            result = linregress(x, durations)
+
+            # check status - plateauing:
+            if result.pvalue >= 0.01:
+                field.set_status(plateauing=True)
+
+            # check status - rising:
+            elif result.slope > 0:
+                field.set_status(rising=True)
+
+            # check status - setting:
+            else:
+                setting_in = -result.intercept / result.slope * u.d
+                field.set_status(setting=True, setting_in=setting_in)
+
+    #--------------------------------------------------------------------------
+    def _iter_observable_fields_by_night(
+            self, observatory, night, observed=None, active=None):
+        """TBD
+        """
+
+        # check that night input is date only:
+        if night.iso[11:] != '00:00:00.000':
+            print("WARNING: For argument 'night' provide date only. " \
+                  "Time information is stripped. To get fields " \
+                  "observable at specific time use 'time' argument.")
+            night = Time(night.iso[:10])
+
+        # connect to database:
+        db = DBConnectorSQLite(self.dbname)
+
+        # get observatory information:
+        observatory_name = observatory
+        observatory = db.get_observatory(observatory)
+        utc_offset = observatory['utc_offset'] * u.h
+
+        # get local noon of current and next day in UTC:
+        noon_current = night + 12 * u.h - utc_offset
+        noon_next = night + 36 * u.h - utc_offset
+        # NOTE: ignoring daylight saving time
+
+        # iterate through fields:
+        for __, __, field in db.iter_fields(
+                observatory=observatory_name, observed=observed,
+                active=active):
+            field_id = field[0]
+            obs_windows = db.get_obs_windows_from_to(
+                    field_id, noon_current, noon_next)
+
+            if len(obs_windows) == 0:
+                continue
+
+            field = self._tuple_to_field(field)
+            obs_windows = self._tuples_to_obs_windows(obs_windows)
+            field.add_obs_window(obs_windows)
+            date = night + 1. * u.d - utc_offset
+            self._set_field_status(
+                    field, date, days_before=3, days_after=7)
+
+            yield field
+
+    #--------------------------------------------------------------------------
+    def _iter_observable_fields_by_datetime(
+            self, observatory, datetime, observed=None, active=None):
+        """TBD
+        """
+
+        # connect to database:
+        db = DBConnectorSQLite(self.dbname)
+        observatory_name = observatory
+
+        # iterate through fields:
+        for __, __, field in db.iter_fields(
+                observatory=observatory_name, observed=observed,
+                active=active):
+            field_id = field[0]
+            obs_windows = db.get_obs_windows_by_datetime(
+                    field_id, datetime)
+
+            if len(obs_windows) == 0:
+                continue
+
+            field = self._tuple_to_field(field)
+            obs_windows = self._tuples_to_obs_windows(obs_windows)
+            field.add_obs_window(obs_windows)
+            self._set_field_status(
+                    field, datetime, days_before=3, days_after=7)
+
+            yield field
+
+    #--------------------------------------------------------------------------
+    def iter_observable_fields(
+            self, observatory, night=None, datetime=None, observed=None,
+            active=None):
+        """TBD
+        """
+
+        # check input:
+        if night is not None:
+            return self._iter_observable_fields_by_night(
+                observatory, night, observed=observed, active=active)
+
+        elif datetime is not None:
+            return self._iter_observable_fields_by_datetime(
+                    observatory, datetime, observed=observed, active=active)
+
+        else:
+            raise ValueError(
+                    "Either provide 'night' or 'time' argument.")
+
+    #--------------------------------------------------------------------------
+    def get_observable_fields(
+            self, observatory, night=None, datetime=None, observed=None,
+            active=None):
+        """TBD
+        """
+
+        observable_fields = [field for field in self.iter_observable_fields(
+                observatory, night=night, datetime=datetime, observed=observed,
+                active=active)]
+
+        return observable_fields
+
+    #--------------------------------------------------------------------------
+    def get_night_start_end(self, observatory, datetime):
+        """TBD
+        """
+
+        datetime = datetime.to_datetime()
+        year = datetime.year
+        month = datetime.month
+        day = datetime.day
+
+        self._setup_observatory(observatory, no_constraints=True)
+        night_start, night_stop = self.telescope.get_sun_set_rise(
+                year, month, day, self.twilight)
+
+        return night_start, night_stop
 
 #==============================================================================
