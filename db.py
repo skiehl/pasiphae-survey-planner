@@ -7,6 +7,7 @@ from astropy.time import Time
 from astropy import units as u
 import os
 import sqlite3
+import warnings
 
 __author__ = "Sebastian Kiehlmann"
 __credits__ = ["Sebastian Kiehlmann"]
@@ -917,5 +918,213 @@ class DBConnectorSQLite:
 
         n_obs = len(data)
         print(f"{n_obs} observations added to data base.")
+
+    #--------------------------------------------------------------------------
+    def _check_observation_status(self, observation_id):
+        """TODO"""
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT scheduled, done
+                FROM Observations
+                WHERE observation_id = {0}
+                """.format(observation_id)
+            results = self._query(connection, query).fetchall()
+
+        if results:
+            exists = True
+            scheduled = bool(results[0][0])
+            done = bool(results[0][1])
+        else:
+            exists, scheduled, done = False, False, False
+
+        return exists, scheduled, done
+
+    #--------------------------------------------------------------------------
+    def _set_observed_by_id(self, observation_id, date=None):
+        """TODO"""
+
+        # check input:
+        if isinstance(observation_id, int):
+            observation_ids = [observation_id]
+        elif isinstance(observation_id, list):
+            observation_ids = observation_id
+        else:
+            raise ValueError("'observation_id' must be int or list of int.")
+
+        n_observations = len(observation_ids)
+
+        if date is None:
+            date = Time.now()
+            dates = [date] * n_observations
+        elif isinstance(date, Time):
+            dates = [date] * n_observations
+        elif isinstance(date, list):
+            dates = date
+        else:
+            raise ValueError(
+                    "'date' must be astropy.Time or list of astropy.Time.")
+
+        count_set = 0
+
+        # iterate through observation IDs and dates:
+        for observation_id, date in zip(observation_ids, dates):
+            # check if it exists and if it was observed already:
+            exists, scheduled, done = self._check_observation_status(
+                    observation_id)
+
+            # does not exist - raise error:
+            if not exists:
+                warnings.warn(
+                        f"Observation with ID {observation_id} does not exist "
+                        "in database. Skipped.")
+
+            # already marked as done - warn:
+            elif done:
+                warnings.warn(
+                    f"Observation {observation_id} is already marked as done. "
+                    "Skipped.")
+
+            # set as observed:
+            else:
+                with SQLiteConnection(self.db_file) as connection:
+                    query = """\
+                        UPDATE Observations
+                        SET scheduled = 0, done = 1, date = '{0}'
+                        WHERE observation_id = {1};
+                        """.format(date, observation_id)
+                    self._query(connection, query, commit=True)
+                    count_set += 1
+
+        print(f"{count_set} (out of {n_observations}) observations set as "
+              "done.")
+
+    #--------------------------------------------------------------------------
+    def _set_observed_by_params(
+            self, field_id, exposure, repetitions, filter_name, date=None):
+        """TODO"""
+
+        # check input:
+        if isinstance(field_id, int):
+            field_ids = [field_id]
+        elif isinstance(field_id, list):
+            field_ids = field_id
+        else:
+            raise ValueError("'field_id' must be int or list of int.")
+
+        n_fields = len(field_ids)
+
+        if exposure is None or isinstance(exposure, float):
+            exposure = [exposure] * n_fields
+        elif isinstance(exposure, list):
+            pass
+        else:
+            raise ValueError("'exposure' must be float or list of float.")
+
+        if repetitions is None or isinstance(repetitions, int):
+            repetitions = [repetitions] * n_fields
+        elif isinstance(repetitions, list):
+            pass
+        else:
+            raise ValueError("'repetitions' must be int or list of int.")
+
+        if filter_name is None or isinstance(filter_name, str):
+            filter_name = [filter_name] * n_fields
+        elif isinstance(filter_name, list):
+            pass
+        else:
+            raise ValueError("'filter_name' must be str or list of str.")
+
+        observation_ids = []
+
+        # iterate through fields and additional information:
+        for field_id, exp, rep, filt in zip(
+                field_ids, exposure, repetitions, filter_name):
+            # build query:
+            query = """\
+                SELECT observation_id, field_id, exposure, repetitions, filter
+                FROM Observations AS o
+                LEFT JOIN Filters AS f
+                ON o.filter_id = f.filter_id
+                WHERE field_id = {0}
+                """.format(field_id)
+
+            if exp is not None:
+                query = """\
+                    {0} AND exposure = {1}
+                    """.format(query, exp)
+
+            if rep is not None:
+                query = """\
+                    {0} AND repetitions = {1}
+                    """.format(query, rep)
+
+            if filt is not None:
+                query = """\
+                    {0} AND filter = '{1}'
+                    """.format(query, filt)
+
+            # query observation ID:
+            with SQLiteConnection(self.db_file) as connection:
+                results = self._query(connection, query).fetchall()
+
+            # multiple observation found - user input required:
+            if len(results) > 1:
+                info = "Multiple observations matching the criteria were " \
+                    "found. Type 'A' to mark all as observed or select a " \
+                    "specific observation ID:\n" \
+                    "Obs ID field ID      exp      rep   filter\n" \
+                    "------ -------- -------- -------- --------"
+
+                for i, result in enumerate(results):
+                    info = f"{info}\n{i:6d} {result[1]:8d} {result[2]:8.1f} " \
+                        f"{result[3]:8d} {result[4]:>8}"
+
+                userin = input(f"{info}\nSelection: ")
+
+                if userin == 'A':
+                    for result in results:
+                        observation_ids.append(result[0])
+                else:
+                    try:
+                        userin = int(userin)
+                        observation_ids.append(results[userin][0])
+                    except (ValueError, IndexError):
+                        raise ValueError(
+                                "Select either 'A' or one of the allowed IDs" \
+                                " (int).")
+
+            # one observation found - save observation ID:
+            elif len(results) == 1:
+                observation_ids.append(results[0][0])
+
+            # no observation found - warn:
+            else:
+                warn_info = "No observation found with the following " \
+                        f"specifications: field ID: {field_id}"
+                if exp is not None:
+                    warn_info = f"{warn_info}, exposure: {exp}"
+                if rep is not None:
+                    warn_info = f"{warn_info}, repetitions: {rep}"
+                if filt is not None:
+                    warn_info = f"{warn_info}, filter: {filt}"
+                warn_info = f"{warn_info}. Skipped."
+                warnings.warn(warn_info)
+
+        # set observed via observation IDs:
+        self._set_observed_by_id(observation_ids, date=date)
+
+    #--------------------------------------------------------------------------
+    def set_observed(
+            self, observation_id=None, field_id=None, exposure=None,
+            repetitions=None, filter_name=None, date=None):
+        """TODO"""
+
+        if observation_id is None:
+            self._set_observed_by_params(
+                    field_id, exposure, repetitions, filter_name, date=date)
+        else:
+            self._set_observed_by_id(observation_id, date=date)
+
 
 #==============================================================================
