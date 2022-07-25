@@ -621,7 +621,8 @@ class SurveyPlanner:
         return night_start, night_stop
 
     #--------------------------------------------------------------------------
-    def iter_fields(self, observatory=None, observed=None, active=None):
+    def iter_fields(
+            self, observatory=None, observed=None, pending=None, active=None):
         """TBD
         """
 
@@ -629,7 +630,20 @@ class SurveyPlanner:
         db = DBConnectorSQLite(self.dbname)
 
         for field in db.get_fields(
-                observatory=observatory, observed=observed, active=active):
+                observatory=observatory, observed=observed, pending=pending,
+                active=active):
             yield self._tuple_to_field(field)
+
+    #--------------------------------------------------------------------------
+    def get_fields(
+            self, observatory=None, observed=None, pending=None, active=None):
+        """TBD
+        """
+
+        fields = [field for field in self.iter_fields(
+                observatory=observatory, observed=observed, pending=pending,
+                active=active)]
+
+        return fields
 
 #==============================================================================

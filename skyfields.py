@@ -283,7 +283,7 @@ class Field:
     #--------------------------------------------------------------------------
     def get_obs_duration(self):
 
-        duration = 0
+        duration = 0 * u.day
 
         for obs_window in self.obs_windows:
             duration += obs_window.duration

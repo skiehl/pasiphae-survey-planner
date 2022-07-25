@@ -197,8 +197,8 @@ class FieldGridVisualizer():
 
 #==============================================================================
 
-class FieldAvailabilityVisualizer():
-    """Visualizations of the field availability.
+class FieldVisualizer():
+    """Parent class for field visualizations.
     """
 
     #--------------------------------------------------------------------------
@@ -206,6 +206,7 @@ class FieldAvailabilityVisualizer():
         # TODO
 
         self.fields = fields
+        self._extract_field_data()
 
     #--------------------------------------------------------------------------
     def _add_fields(self, fields):
@@ -213,8 +214,7 @@ class FieldAvailabilityVisualizer():
 
         if fields is not None:
             self.fields = fields
-
-        self._extract_field_data()
+            self._extract_field_data()
 
     #--------------------------------------------------------------------------
     def _extract_field_data(self):
@@ -231,6 +231,8 @@ class FieldAvailabilityVisualizer():
         self.fields_dur = np.zeros(self.n_fields)
         self.fields_stat = np.zeros(self.n_fields, dtype=int)
         self.fields_set_dur = []
+        self.fields_obs_done = np.zeros(self.n_fields)
+        self.fields_obs_pending = np.zeros(self.n_fields)
 
         for i, field in enumerate(self.fields):
             self.fields_ra[i] = field.center_ra.rad
@@ -239,6 +241,8 @@ class FieldAvailabilityVisualizer():
             self.fields_stat[i] = field.status
             if field.status == 3:
                 self.fields_set_dur.append(field.setting_in.value)
+            self.fields_obs_done[i] = field.n_obs_done
+            self.fields_obs_pending[i] = field.n_obs_pending
 
         self.fields_ra = np.where(
                 self.fields_ra > np.pi,
@@ -274,6 +278,12 @@ class FieldAvailabilityVisualizer():
             cax = cbar.ax
 
         return cax, cbar
+
+#==============================================================================
+
+class FieldAvailabilityVisualizer(FieldVisualizer):
+    """Visualizations of the field availability.
+    """
 
     #--------------------------------------------------------------------------
     def field_duration(
@@ -354,3 +364,34 @@ class FieldAvailabilityVisualizer():
                 'setting'])
 
         return fig, ax, cbar
+
+#==============================================================================
+
+class FieldObservationVisualizer(FieldVisualizer):
+    """Visualizations of the field observation status.
+    """
+
+    #--------------------------------------------------------------------------
+    def field_status(
+            self, fields=None, ax=None, **kwargs):
+        # TODO
+
+        # extract coordinates and status from fields:
+        self._add_fields(fields)
+
+        # create figure:
+        fig, ax, cax = self._create_figure(ax, None)
+
+        # plot pending fields:
+        sel = self.fields_obs_pending > 0
+        sc = ax.scatter(
+                self.fields_ra[sel], self.fields_dec[sel],
+                edgecolor='0.4', facecolor='w', zorder=2, **kwargs)
+
+        # plot observed fields:
+        sel = self.fields_obs_done > 0
+        sc = ax.scatter(
+                self.fields_ra[sel], self.fields_dec[sel], color='k',
+                marker='s', zorder=1, **kwargs)
+
+        return fig, ax
