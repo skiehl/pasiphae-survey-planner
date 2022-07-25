@@ -555,16 +555,25 @@ class DBConnectorSQLite:
             print(f'\r{n_fields} fields added to database.                   ')
 
     #--------------------------------------------------------------------------
-    def get_fields(self, observatory=None, observed=None, active=True):
+    def get_fields(
+            self, observatory=None, observed=None, pending=None, active=True):
         """TODO"""
 
         # set query condition for observed or not:
         if observed is None:
             condition_observed = ""
         elif observed:
-            condition_observed =  " AND nobs > 0"
+            condition_observed =  " AND nobs_done > 0"
         else:
-            condition_observed = " AND nobs is null"
+            condition_observed = " AND nobs_done = 0"
+
+        # set query condition for pending observation or not:
+        if pending is None:
+            condition_pending = ""
+        elif pending:
+            condition_pending =  " AND nobs_pending > 0"
+        else:
+            condition_pending = " AND nobs_pending = 0"
 
         # set query condition for observatory:
         if observatory:
@@ -577,28 +586,33 @@ class DBConnectorSQLite:
             query = """\
                 SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
                     f.tilt, o.name observatory, f.active,
-                    f.jd_next_obs_window, COALESCE(p.nobs, 0) nobs
+                    f.jd_next_obs_window, p.nobs_done,
+                    p.nobs_tot - p.nobs_done AS nobs_pending
                 FROM Fields AS f
                 LEFT JOIN Observatories AS o
                     ON f.observatory_id = o.observatory_id
                 LEFT JOIN (
-                	SELECT field_id, COUNT(*) nobs
+                	SELECT field_id, SUM(Done) nobs_done, COUNT(*) nobs_tot
                 	FROM Observations
                 	GROUP BY field_id
                 	) AS p
                 ON f.field_id = p.field_id
-                WHERE (active = {0} {1} {2});
-                """.format(active, condition_observatory, condition_observed)
+                WHERE (active = {0} {1} {2} {3});
+                """.format(
+                        active, condition_observatory, condition_observed,
+                        condition_pending)
             result = self._query(connection, query).fetchall()
 
         return result
 
     #--------------------------------------------------------------------------
-    def iter_fields(self, observatory=None, observed=None, active=True):
+    def iter_fields(
+            self, observatory=None, observed=None, pending=None, active=True):
         """TODO"""
 
         fields = self.get_fields(
-                observatory=observatory, observed=observed, active=active)
+                observatory=observatory, observed=observed, pending=pending,
+                active=active)
         n = len(fields)
 
         for i, field in enumerate(fields):

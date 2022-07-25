@@ -27,7 +27,7 @@ class Field:
     #--------------------------------------------------------------------------
     def __init__(
             self, fov, ra, dec, tilt=0., field_id=None,
-            latest_obs_window_jd=None, n_obs=0):
+            latest_obs_window_jd=None, n_obs_done=0, n_obs_pending=0):
         """A field in the sky."""
 
         self.id = field_id
@@ -43,7 +43,8 @@ class Field:
         self.obs_windows = []
         self.status = -1
         self.setting_in = None
-        self.n_obs = n_obs
+        self.n_obs_done = n_obs_done
+        self.n_obs_pending = n_obs_pending
 
     #--------------------------------------------------------------------------
     def __str__(self):
@@ -55,10 +56,13 @@ class Field:
             Center Dec:    {3:+8.4f} deg
             Tilt:          {4:+8.4f} deg
             Status:        {5}
+            Observations:  {6} pending
+                           {7} done
             """.format(
                 f'{self.id}' if self.id is not None else '',
                 self.fov.arcmin, self.center_ra.deg, self.center_dec.deg,
-                self.tilt.deg, self._status_to_str()))
+                self.tilt.deg, self._status_to_str(), self.n_obs_pending,
+                self.n_obs_done))
 
         return info
 

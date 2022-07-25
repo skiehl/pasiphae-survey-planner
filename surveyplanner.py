@@ -289,10 +289,11 @@ class SurveyPlanner:
         """
 
         field_id, fov, center_ra, center_dec, tilt, __, __, \
-            latest_obs_window_jd, n_obs = field_tuple
+            latest_obs_window_jd, n_obs_done, n_obs_pending = field_tuple
         field = Field(
             fov, center_ra, center_dec, tilt, field_id=field_id,
-            latest_obs_window_jd=latest_obs_window_jd, n_obs=n_obs)
+            latest_obs_window_jd=latest_obs_window_jd, n_obs_done=n_obs_done,
+            n_obs_pending=n_obs_pending)
 
         return field
 
@@ -493,7 +494,8 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _iter_observable_fields_by_night(
-            self, observatory, night, observed=None, active=None):
+            self, observatory, night, observed=None, pending=None,
+            active=None):
         """TBD
         """
 
@@ -520,7 +522,7 @@ class SurveyPlanner:
         # iterate through fields:
         for __, __, field in db.iter_fields(
                 observatory=observatory_name, observed=observed,
-                active=active):
+                pending=pending, active=active):
             field_id = field[0]
             obs_windows = db.get_obs_windows_from_to(
                     field_id, noon_current, noon_next)
@@ -539,7 +541,8 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _iter_observable_fields_by_datetime(
-            self, observatory, datetime, observed=None, active=None):
+            self, observatory, datetime, observed=None, pending=None,
+            active=None):
         """TBD
         """
 
@@ -550,7 +553,7 @@ class SurveyPlanner:
         # iterate through fields:
         for __, __, field in db.iter_fields(
                 observatory=observatory_name, observed=observed,
-                active=active):
+                pending=pending, active=active):
             field_id = field[0]
             obs_windows = db.get_obs_windows_by_datetime(
                     field_id, datetime)
@@ -569,18 +572,20 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def iter_observable_fields(
             self, observatory, night=None, datetime=None, observed=None,
-            active=None):
+            pending=None, active=None):
         """TBD
         """
 
         # check input:
         if night is not None:
             return self._iter_observable_fields_by_night(
-                observatory, night, observed=observed, active=active)
+                    observatory, night, observed=observed, pending=pending,
+                    active=active)
 
         elif datetime is not None:
             return self._iter_observable_fields_by_datetime(
-                    observatory, datetime, observed=observed, active=active)
+                    observatory, datetime, observed=observed, pending=pending,
+                    active=active)
 
         else:
             raise ValueError(
@@ -589,13 +594,13 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def get_observable_fields(
             self, observatory, night=None, datetime=None, observed=None,
-            active=None):
+            pending=None, active=None):
         """TBD
         """
 
         observable_fields = [field for field in self.iter_observable_fields(
                 observatory, night=night, datetime=datetime, observed=observed,
-                active=active)]
+                pending=pending, active=active)]
 
         return observable_fields
 
@@ -614,5 +619,17 @@ class SurveyPlanner:
                 year, month, day, self.twilight)
 
         return night_start, night_stop
+
+    #--------------------------------------------------------------------------
+    def iter_fields(self, observatory=None, observed=None, active=None):
+        """TBD
+        """
+
+        # connect to database:
+        db = DBConnectorSQLite(self.dbname)
+
+        for field in db.get_fields(
+                observatory=observatory, observed=observed, active=active):
+            yield self._tuple_to_field(field)
 
 #==============================================================================
