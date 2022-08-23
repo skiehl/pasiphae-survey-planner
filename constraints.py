@@ -7,6 +7,7 @@ from abc import ABCMeta, abstractmethod
 from astropy.coordinates import get_sun, get_moon
 import astropy.units as u
 import numpy as np
+from textwrap import dedent
 
 import utilities as ut
 
@@ -28,7 +29,11 @@ class Constraints(object):
 
     #--------------------------------------------------------------------------
     def __init__(self):
-        """List of constraints that are getting jointly evaluated.
+        """Create Constraints instance.
+
+        Returns
+        -------
+        None
         """
 
         self.constraints = []
@@ -63,6 +68,20 @@ class Constraints(object):
     #--------------------------------------------------------------------------
     def add(self, constraint):
         """Add a new constraint.
+
+        Parameters
+        ----------
+        constraint : constraint
+            An instance of a Constraint as defined in this module.
+
+        Raises
+        ------
+        TypeError
+            Raised if the handed constraint is not of Constraint parent-class.
+
+        Returns
+        -------
+        None
         """
 
         # chack if Constraint instance:
@@ -73,15 +92,15 @@ class Constraints(object):
         self.size += 1
 
     #--------------------------------------------------------------------------
-    def get(self, source_coord, telescope):
+    def get(self, source_coord, frame):
         """Evaluate all constraints jointly.
 
         Parameters
         ----------
         source_coord : astropy.SkyCoord
-            Coordinates of the target sources.
-        telescope : Telescope
-            Provides the telescope position and current date and time.
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
 
         Returns
         -------
@@ -92,7 +111,7 @@ class Constraints(object):
         """
 
         observable = np.logical_and.reduce(
-                [constraint.get(source_coord, telescope) \
+                [constraint.get(source_coord, frame) \
                  for constraint in self.constraints])
 
         return observable
@@ -141,8 +160,8 @@ class Constraint(object, metaclass=ABCMeta):
             True if the frame is the location and the time(s) in the frame are
             identical. False, otherwise.
 
-        Note
-        -------
+        Notes
+        -----
         This method is used in Constraint-classes that need to calculate e.g.
         the Moon or Sun position and avoid re-calculating it when the provided
         frame is the same as previously used to calculate those positions.
@@ -162,16 +181,16 @@ class Constraint(object, metaclass=ABCMeta):
 
     #--------------------------------------------------------------------------
     @abstractmethod
-    def get(self, source_coord, telescope):
-        """Evaluate the constraint for given targets, a specific location and
+    def get(self, source_coord, frame):
+        """Evaluate the constraint for a given target, a specific location and
         time.
 
         Parameters
         ----------
         source_coord : astropy.SkyCoord
-            Coordinates of the target sources.
-        telescope : Telescope
-            Provides the telescope position and current date and time.
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
 
         Returns
         -------
@@ -203,7 +222,6 @@ class Constraint(object, metaclass=ABCMeta):
         __init__() method.
         """
 
-
 #==============================================================================
 
 class ElevationLimit(Constraint):
@@ -216,34 +234,36 @@ class ElevationLimit(Constraint):
         """Create ElevationLimit instance.
 
         Parameters
-        -----
+        ----------
         limit : float
             Lower elevation limit in degrees.
+
+        Returns
+        -------
+        None
         """
 
         self.limit = limit * u.deg
 
     #--------------------------------------------------------------------------
     def __str__(self):
-        """String representation.
-        """
 
         return 'Elevation limit: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
     def get(self, source_coord, frame):
-        """Evaluate the constraint for given targets, a specific location and
+        """Evaluate the constraint for a given target, a specific location and
         time.
 
         Parameters
-        -----
+        ----------
         source_coord : astropy.SkyCoord
-            Coordinates of the target sources.
+            Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
 
         Returns
-        -----
+        -------
         out : numpy.ndarray
             Array of boolean values. One entry for each input coordinate.
             The entry is True, if the source is observable according to the
@@ -260,7 +280,7 @@ class ElevationLimit(Constraint):
         """Returns the constraint parameters.
 
         Returns
-        -----
+        -------
         dict
             Constraint parameters.
         """
@@ -280,7 +300,7 @@ class AirmassLimit(Constraint):
         """Create AirmassLimit instance.
 
         Parameters
-        -----
+        ----------
         limit : float
             Upper airmass limit
         conversion : str, default="secz"
@@ -288,6 +308,10 @@ class AirmassLimit(Constraint):
             Options: "secz" (default), "Rosenberg", "KastenYoung",
             "Young". See alt_to_airmass() docstring in utilities.py for
             details.
+
+        Returns
+        -------
+        None
         """
 
         self.limit = limit
@@ -295,25 +319,23 @@ class AirmassLimit(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
-        """String representation.
-        """
 
         return 'Airmass limit: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
     def get(self, source_coord, frame):
-        """Evaluate the constraint for given targets, a specific location and
+        """Evaluate the constraint for a given target, a specific location and
         time.
 
         Parameters
-        -----
+        ----------
         source_coord : astropy.SkyCoord
-            Coordinates of the target sources.
+            Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
 
         Returns
-        -----
+        -------
         out : numpy.ndarray
             Array of boolean values. One entry for each input coordinate.
             The entry is True, if the source is observable according to the
@@ -331,7 +353,7 @@ class AirmassLimit(Constraint):
         """Returns the constraint parameters.
 
         Returns
-        -----
+        -------
         dict
             Constraint parameters.
         """
@@ -353,10 +375,14 @@ class SunDistance(Constraint):
         """Create SunDistance instance.
 
         Parameters
-        -----
+        ----------
         limit : float
             Minimum required angular separation between targets and the Sun in
             degrees.
+
+        Returns
+        -------
+        None
         """
 
         self.limit = limit * u.deg
@@ -365,25 +391,23 @@ class SunDistance(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
-        """String representation.
-        """
 
         return 'Sun distance: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
     def get(self, source_coord, frame):
-        """Evaluate the constraint for given targets, a specific location and
+        """Evaluate the constraint for a given target, a specific location and
         time.
 
         Parameters
-        -----
+        ----------
         source_coord : astropy.SkyCoord
-            Coordinates of the target sources.
+            Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
 
         Returns
-        -----
+        -------
         out : numpy.ndarray
             Array of boolean values. One entry for each input coordinate.
             The entry is True, if the source is observable according to the
@@ -411,7 +435,7 @@ class SunDistance(Constraint):
         """Returns the constraint parameters.
 
         Returns
-        -----
+        -------
         dict
             Constraint parameters.
         """
@@ -431,10 +455,14 @@ class MoonDistance(Constraint):
         """Create MoonDistance instance.
 
         Parameters
-        -----
+        ----------
         limit : float
             Minimum required angular separation between targets and the Moon in
             degrees.
+
+        Returns
+        -------
+        None
         """
 
         self.limit = limit * u.deg
@@ -443,25 +471,23 @@ class MoonDistance(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
-        """String representation.
-        """
 
         return 'Moon distance: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
     def get(self, source_coord, frame):
-        """Evaluate the constraint for given targets, a specific location and
+        """Evaluate the constraint for a given target, a specific location and
         time.
 
         Parameters
-        -----
+        ----------
         source_coord : astropy.SkyCoord
-            Coordinates of the target sources.
+            Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
 
         Returns
-        -----
+        -------
         out : numpy.ndarray
             Array of boolean values. One entry for each input coordinate.
             The entry is True, if the source is observable according to the
@@ -488,7 +514,7 @@ class MoonDistance(Constraint):
         """Returns the constraint parameters.
 
         Returns
-        -----
+        -------
         dict
             Constraint parameters.
         """
@@ -510,11 +536,15 @@ class MoonPolarization(Constraint):
         """Create MoonPolarization instance.
 
         Parameters
-        -----
+        ----------
         limit : float
             Angular range to avoid polarized, scattered Moon light. Sources
             within the range (90-limit, 90+limit) degrees separation from the
             Moon are not observable.
+
+        Returns
+        -------
+        None
         """
 
         self.limit = limit * u.deg
@@ -525,29 +555,27 @@ class MoonPolarization(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
-        """String representation.
-        """
 
         return 'Moon polarization: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
     def get(self, source_coord, frame):
-        """Evaluate the constraint for given targets, a specific location and
+        """Evaluate the constraint for a given target, a specific location and
         time.
 
         Parameters
-        -----
+        ----------
         source_coord : astropy.SkyCoord
-            Coordinates of the target sources.
+            Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
 
         Returns
-        -----
+        -------
         out : numpy.ndarray
             Array of boolean values. One entry for each input coordinate.
             The entry is True, if the source is observable according to the
-            constrains, and False otherwise.
+            constraint, and False otherwise.
         """
 
         # if frame is the same as before re-use Moon positions:
@@ -571,11 +599,203 @@ class MoonPolarization(Constraint):
         """Returns the constraint parameters.
 
         Returns
-        -----
+        -------
         dict
             Constraint parameters.
         """
 
         params = {'limit': self.limit.value}
+
+        return params
+
+#==============================================================================
+
+class PolyHADecLimit(Constraint):
+    """ TODO
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, polygon):
+        """Create PolyHADecLimit instance.
+
+        Parameters
+        ----------
+        polygon : list of tuples of two floats
+            Each list entry corresponds to one point that defines the
+            Hourangle-Declination-limit outline. Each point is a tuple of
+            two floats; the first one giving the hourangle in hours (-12, +12),
+            the second giving the declination in degrees (-90, 90).
+
+        Returns
+        -------
+        None
+        """
+
+        self.polygon = polygon
+
+    #--------------------------------------------------------------------------
+    def __str__(self):
+
+        info = dedent(
+                """\
+                Polygon Hourangle-Declination limits:
+                HA (h) Dec (deg)
+                """)
+        for ha, dec in self.polygon:
+            info = f'{info}{ha:+6.2f} {dec:+6.2f}\n'
+
+        return info
+
+    #--------------------------------------------------------------------------
+    def _orientation(self, points, q0, q1):
+        """Orientation of a triangle spanned by points p, q1, q2; where p can
+        be an array of many points.
+
+        Parameters
+        ----------
+        points : numpy.ndarray
+            Coordinates of the triangle's first point.
+        q0 : tuple of floats
+            Coordinate of the triangles second point.
+        q1 : tuple of floats
+            Coordinate of the triangles third point.
+
+        Returns
+        -------
+        orientation : numpy.ndarray
+            One dimensional array of int type. +1 for counter-clockwise
+            triangles; -1 clockwise triangles; 0 otherwise.
+        """
+
+        orientation = np.sign(
+                (q1[0] - q0[0]) * (points[1] - q0[1]) \
+                - (points[0] - q0[0]) * (q1[1] - q0[1]))
+
+        return orientation
+
+    #--------------------------------------------------------------------------
+    def _crossing(self, points, q0, q1):
+        """Check which points, when extended toward the right, would cross the
+        line segment spanned from q0 to q1, and whether the line segment
+        crosses upward or downward.
+
+        Parameters
+        ----------
+        points : numpy.ndarray
+            Two dimensional array. The first column has to contain the
+            hourangles, the second column the declinations.
+        q0 : tuple of floats
+            First coordinate of the line segment.
+        q1 : tuple of floats
+            Second coordinate of the line segment.
+
+        Returns
+        -------
+        crossing : numpy.ndarray
+            One dimensional array of int type. +1 for points whose extension
+            to the right is crossed upward by the line segment; -1 for points
+            whose extension to the right is crossed downward by the line
+            segment; 0 otherwise.
+        """
+
+        p_heq_q0 = q0[1] <= points[1]
+        p_heq_q1 = q1[1] <= points[1]
+        p_left = self._orientation(points, q0, q1)
+
+        crossing = np.zeros(points.shape[1], dtype=int)
+
+        # count segments crossing upwards and right of point as +1:
+        sel = np.logical_and.reduce([p_heq_q0, ~p_heq_q1, p_left > 0])
+        crossing[sel] += 1
+
+        # count segments crossing downwards and right of point as -1:
+        sel = np.logical_and.reduce([~p_heq_q0, p_heq_q1, p_left < 0])
+        crossing[sel] -= 1
+
+        return crossing
+
+    #--------------------------------------------------------------------------
+    def _inside_polygon(self, points, polygon):
+        """Check whether or not points are inside a given polygon.
+
+        Parameters
+        ----------
+        points : numpy.ndarray
+            Two dimensional array. The first column has to contain the
+            hourangles, the second column the declinations.
+        polygon : list of tuples of two floats
+            Polygon points as stored in this class.
+
+        Returns
+        -------
+        is_inside : numpy.ndarray
+            One dimensional array of bool type. True, for points inside the
+            polygon; False, otherwise.
+
+        Notes
+        -----
+        The algorithm is a vectorized python port of that by Dan Sunday [1].
+
+        References
+        ----------
+        [1] https://web.archive.org/web/20130126163405/http://geomalgorithms.com/a03-_inclusion.html
+        """
+
+        # close polygon:
+        polygon = np.array(polygon + [polygon[0]])
+
+        # iterate through polygon segments to get winding number:
+        winding_number = np.zeros(points.shape[1], dtype=int)
+
+        for q0, q1 in zip(polygon[0:-1], polygon[1:]):
+            winding_number += self._crossing(points, q0, q1)
+
+        is_inside = winding_number > 0
+
+        return is_inside
+
+    #--------------------------------------------------------------------------
+    def get(self, source_coord, frame):
+        """Evaluate the constraint for a given target, a specific location and
+        time.
+
+        Parameters
+        ----------
+        source_coord : astropy.SkyCoord
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
+
+        Returns
+        -------
+        out : numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to the
+            constraint, and False otherwise.
+        """
+
+        # create array of hourangle-declination points:
+        lst = frame.obstime.sidereal_time('apparent')
+        hourangle = (source_coord.ra - lst).hourangle
+        hourangle = (12. + hourangle) % 24. - 12.
+        dec = np.ones(hourangle.size) * source_coord.dec.deg
+        points = np.array([hourangle, dec])
+
+        # check which points are within the polygon:
+        observable = self._inside_polygon(points, self.polygon)
+
+        return observable
+
+    #--------------------------------------------------------------------------
+    def get_params(self):
+        """Returns the constraint parameters.
+
+        Returns
+        -------
+        dict
+            Constraint parameters.
+        """
+
+        params = {'polygon': self.polygon}
 
         return params
