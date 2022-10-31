@@ -3,7 +3,7 @@
 """Sky fields for the pasiphae survey.
 """
 
-from astropy.coordinates import AltAz, Angle, EarthLocation, get_sun
+from astropy.coordinates import AltAz, Angle, EarthLocation, get_sun, SkyCoord
 from astropy.time import Time, TimeDelta
 from astropy import units as u
 import numpy as np
@@ -316,7 +316,7 @@ class SurveyPlanner:
         return obs_windows
 
     #--------------------------------------------------------------------------
-    def _iter_fields(self, observatory=None, active=None):
+    def _iter_fields(self, observatory=None, active=True):
         """TBD
         """
 
@@ -334,7 +334,7 @@ class SurveyPlanner:
         """TBD
         """
 
-        print(f'Calculate observing windows until {0}..'.format(
+        print('Calculate observing windows until {0}..'.format(
                 date_stop.iso[:10]))
 
         jd_stop = date_stop.jd
@@ -495,7 +495,7 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def _iter_observable_fields_by_night(
             self, observatory, night, observed=None, pending=None,
-            active=None):
+            active=True):
         """TBD
         """
 
@@ -542,7 +542,7 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def _iter_observable_fields_by_datetime(
             self, observatory, datetime, observed=None, pending=None,
-            active=None):
+            active=True):
         """TBD
         """
 
@@ -572,7 +572,7 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def iter_observable_fields(
             self, observatory, night=None, datetime=None, observed=None,
-            pending=None, active=None):
+            pending=None, active=True):
         """TBD
         """
 
@@ -594,7 +594,7 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def get_observable_fields(
             self, observatory, night=None, datetime=None, observed=None,
-            pending=None, active=None):
+            pending=None, active=True):
         """TBD
         """
 
@@ -622,7 +622,7 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def iter_fields(
-            self, observatory=None, observed=None, pending=None, active=None):
+            self, observatory=None, observed=None, pending=None, active=True):
         """TBD
         """
 
@@ -636,7 +636,7 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def get_fields(
-            self, observatory=None, observed=None, pending=None, active=None):
+            self, observatory=None, observed=None, pending=None, active=True):
         """TBD
         """
 
@@ -645,5 +645,90 @@ class SurveyPlanner:
                 active=active)]
 
         return fields
+
+    #--------------------------------------------------------------------------
+    def get_field_by_id(self, field_id):
+        """TBD
+        """
+
+        # connect to database:
+        db = DBConnectorSQLite(self.dbname)
+
+        field = db.get_field_by_id(field_id)
+
+        if not len(field):
+            raise ValueError(f"Field with ID {field_id} does not exist.")
+
+        field = self._tuple_to_field(field[0])
+
+        return field
+
+    #--------------------------------------------------------------------------
+    def _count_neighbors(
+            self, radius, field_id, observatory=None, observed=None,
+            pending=None, active=True, return_neighbor_ids=False):
+        """TBD
+        """
+
+        # get coordinates of field of interest:
+        field = self.get_field_by_id(field_id)
+        field_coord = SkyCoord(field.center_ra, field.center_dec)
+
+        # get coordinates of all fields relevant for counting:
+        fields_id = []
+        fields_ra = []
+        fields_dec = []
+
+        for field in self.iter_fields(
+                observatory=observatory, observed=observed, pending=pending,
+                active=active):
+
+            # skip the target field itself:
+            if field_id == field.id:
+                continue
+
+            fields_id.append(field.id)
+            fields_ra.append(field.center_ra)
+            fields_dec.append(field.center_dec)
+
+        fields_coord = SkyCoord(fields_ra, fields_dec)
+
+        # count neighbors:
+        sel = field_coord.separation(fields_coord) <= radius
+        count = np.sum(sel)
+
+        if return_neighbor_ids:
+            neighbor_ids = np.array(fields_id)[sel]
+
+            return count, neighbor_ids
+
+        return count
+
+    #--------------------------------------------------------------------------
+    def count_neighbors(
+            self, radius, field_ids, observatory=None, observed=None,
+            pending=None, active=True):
+        """TBD
+        """
+
+        if isinstance(field_ids, int):
+            neighbor_count = self._count_neighbors(
+                    radius, field_ids, observatory=observatory,
+                    observed=observed, pending=pending, active=active)
+
+        elif isinstance(field_ids, list):
+            neighbor_count = []
+
+            for field_id in field_ids:
+                count = self._count_neighbors(
+                        radius, field_id, observatory=observatory,
+                        observed=observed, pending=pending, active=active)
+                neighbor_count.append(count)
+
+        else:
+            raise ValueError("'field_ids' has to be int or list.")
+
+        return neighbor_count
+
 
 #==============================================================================

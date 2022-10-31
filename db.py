@@ -619,6 +619,32 @@ class DBConnectorSQLite:
             yield i, n, field
 
     #--------------------------------------------------------------------------
+    def get_field_by_id(self, field_id):
+        """TODO"""
+
+        # query data base:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                    SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
+                        f.tilt, o.name observatory, f.active,
+                        f.jd_next_obs_window, p.nobs_done,
+                        p.nobs_tot - p.nobs_done AS nobs_pending
+                    FROM Fields AS f
+                    LEFT JOIN Observatories AS o
+                        ON f.observatory_id = o.observatory_id
+                    LEFT JOIN (
+                        SELECT field_id, SUM(Done) nobs_done, COUNT(*) nobs_tot
+                        FROM Observations
+                        GROUP BY field_id
+                        ) AS p
+                    ON f.field_id = p.field_id
+                    WHERE f.field_id = {0} AND p.field_id = {0};
+                    """.format(field_id)
+            result = self._query(connection, query).fetchall()
+
+        return result
+
+    #--------------------------------------------------------------------------
     def add_constraints(self, observatory, twilight, constraints=()):
         """TODO"""
 
