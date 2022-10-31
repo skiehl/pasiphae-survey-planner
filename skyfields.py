@@ -28,7 +28,36 @@ class Field:
     def __init__(
             self, fov, ra, dec, tilt=0., field_id=None,
             latest_obs_window_jd=None, n_obs_done=0, n_obs_pending=0):
-        """A field in the sky."""
+        """A field in the sky.
+
+        Parameters
+        ----------
+        fov : float
+            Field of view in radians. Diameter East to West and North to South.
+        ra : float
+            Right ascension of the field center in radians.
+        dec : float
+            Declination of the field center in radians.
+        tilt : float, optional
+            Tilt of the field such that the top and bottom borders are not
+            parallel to the horizon. The default is 0..
+        field_id : int, optional
+            ID of the field. The default is None.
+        latest_obs_window_jd : float, optional
+            The latest Julian date for which an observing window was calculated
+            for this field. The default is None.
+        n_obs_done : int, optional
+            The number of observations finished for this field. The default is
+            0.
+        n_obs_pending : int, optional
+            The number of observations pending for this field. The default is
+            0.
+
+        Returns
+        -------
+        None.
+
+        """
 
         self.id = field_id
         self.fov = Angle(fov, unit='rad')
@@ -48,6 +77,13 @@ class Field:
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Return information about the field instance.
+
+        Returns
+        -------
+        info : str
+            Description of main field properties.
+        """
 
         info = dedent("""\
             Sky field {0:s}
@@ -68,7 +104,12 @@ class Field:
 
     #--------------------------------------------------------------------------
     def _status_to_str(self):
-        """TBD
+        """Convert the field status ID to readable information.
+
+        Returns
+        -------
+        status_str : str
+            Description of the field status.
         """
 
         if self.status == -1:
@@ -88,7 +129,19 @@ class Field:
     def _field_corners_init(self, fov):
         """Create field corner points in cartesian coordinates.
 
-        TODO
+        Parameters
+        ----------
+        fov : float
+            Field of view in radians.
+
+        Returns
+        -------
+        x : numpy.ndarray
+            Cartesian x-coordinates of the field corner points.
+        y : numpy.ndarray
+            Cartesian y-coordinates of the field corner points.
+        z : numpy.ndarray
+            Cartesian z-coordinates of the field corner points.
         """
 
         diff = np.tan(fov / 2.)
@@ -102,7 +155,25 @@ class Field:
     def _rot_tilt(self, x, y, z, tilt):
         """Rotate around x-axis by tilt angle.
 
-        TODO
+        Parameters
+        ----------
+        x : np.ndarray or float
+            x-coordinates to rotate.
+        y : np.ndarray or float
+            y-coordinates to rotate.
+        z : np.ndarray or float
+            z-coordinates to rotate.
+        tilt : float
+            Angle in radians by which the coordinates are rotated.
+
+        Returns
+        -------
+        x_rot : np.ndarray or float
+            Rotated x-coordinates.
+        y_rot : np.ndarray or float
+            Rotated y-coordinates.
+        z_rot : np.ndarray or float
+            Rotated z-coordinates.
         """
 
         x_rot = x
@@ -115,7 +186,26 @@ class Field:
     def _rot_dec(self, x, y, z, dec):
         """Rotate around y-axis by declination angle.
 
-        TODO"""
+        Parameters
+        ----------
+        x : np.ndarray or float
+            x-coordinates to rotate.
+        y : np.ndarray or float
+            y-coordinates to rotate.
+        z : np.ndarray or float
+            z-coordinates to rotate.
+        dec : float
+            Angle in radians by which the coordinates are rotated.
+
+        Returns
+        -------
+        x_rot : np.ndarray or float
+            Rotated x-coordinates.
+        y_rot : np.ndarray or float
+            Rotated y-coordinates.
+        z_rot : np.ndarray or float
+            Rotated z-coordinates.
+        """
 
         dec = -dec
         x_rot = x * np.cos(dec) + z * np.sin(dec)
@@ -128,7 +218,26 @@ class Field:
     def _rot_ra(self, x, y, z, ra):
         """Rotate around z-axis by right ascension angle.
 
-        TODO"""
+        Parameters
+        ----------
+        x : np.ndarray or float
+            x-coordinates to rotate.
+        y : np.ndarray or float
+            y-coordinates to rotate.
+        z : np.ndarray or float
+            z-coordinates to rotate.
+        ra : float
+            Angle in radians by which the coordinates are rotated.
+
+        Returns
+        -------
+        x_rot : np.ndarray or float
+            Rotated x-coordinates.
+        y_rot : np.ndarray or float
+            Rotated y-coordinates.
+        z_rot : np.ndarray or float
+            Rotated z-coordinates.
+        """
 
         x_rot = x * np.cos(ra) - y * np.sin(ra)
         y_rot = x * np.sin(ra) + y * np.cos(ra)
@@ -140,7 +249,22 @@ class Field:
     def _cart_to_sphere(self, x, y, z):
         """Transform cartesian to spherical coordinates.
 
-        TODO"""
+        Parameters
+        ----------
+        x : np.ndarray or float
+            x-coordinates to transform.
+        y : np.ndarray or float
+            y-coordinates to transform.
+        z : np.ndarray or float
+            z-coordinates to transform.
+
+        Returns
+        -------
+        ra : np.ndarray or float
+            Right ascension in radians.
+        dec : np.ndarray or float
+            Declination in radians.
+        """
 
         r = np.sqrt(x**2 + y**2 + z**2)
         za = np.arccos(z / r)
@@ -153,7 +277,10 @@ class Field:
     def _calc_field_corners(self):
         """Calculate field corner points at specified field center coordinates.
 
-        TODO
+        Returns
+        -------
+        corners_coord : astropy.coordinates.SkyCoord
+            The sky coordinates of the field corners.
         """
 
         x, y, z = self._field_corners_init(self.fov.rad)
@@ -282,6 +409,13 @@ class Field:
 
     #--------------------------------------------------------------------------
     def get_obs_duration(self):
+        """Get the total duration of all observing windows.
+
+        Returns
+        -------
+        duration : astropy.units.Quantity
+            The duration in hours.
+        """
 
         duration = 0 * u.day
 
@@ -314,6 +448,26 @@ class Field:
     def set_status(
             self, rising=None, plateauing=None, setting=None, setting_in=None,
             not_available=None):
+        """Set the field status.
+
+        Parameters
+        ----------
+        rising : bool, optional
+            True, if the field is rising. The default is None.
+        plateauing : bool, optional
+            True, if the field is neither rising nor setting. The default is
+            None.
+        setting : bool, optional
+            True, if the field is setting. The default is None.
+        setting_in : astropy.unit.Quantity, optional
+            The duration until the field is setting. The default is None.
+        not_available : bool, optional
+            True, if the status is unknown. The default is None.
+
+        Returns
+        -------
+        None.
+        """
 
         if not_available:
             self.status = 0
@@ -336,7 +490,37 @@ class SkyFields:
             dec_lim_south=None):
         """Separation of the sky into fields.
 
-        TODO"""
+        Parameters
+        ----------
+        fov : float
+            Field of view in radians. Diameter East to West and North to South.
+        overlap : float
+            Amount of overlap of neighboring fields in radians.
+        tilt : float, optional
+            Tilt of the field such that the top and bottom borders are not
+            parallel to the horizon. The default is 0..
+        b_lim : float, optional
+            Declination limit above/below the Galactic plane in radians. No
+            fields are created with field centers located in the range defined
+            by this limmit. The default is 0..
+        dec_lim_north : float, optional
+            Declination limit in the North in radians. No fields are created
+            with field center exceeding this limit towards North. The default
+            is None.
+        dec_lim_south : float, optional
+            Declination limit in the South in radians. No fields are created
+            with field center exceeding this limit towards South. The default
+            is None.
+
+        Raises
+        ------
+        ValueError
+            Raised if the overlap is larger than the field of view.
+
+        Returns
+        -------
+        None.
+        """
 
         if overlap >= fov:
             raise ValueError("Overlap must be smaller than field of view.")
@@ -355,8 +539,15 @@ class SkyFields:
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Return information about the SkyFields instance.
 
-        return dedent("""\
+        Returns
+        -------
+        info : str
+            Description of main properties.
+        """
+
+        info = dedent("""\
             SkyFields
             Field of view:    {0:7.4f} deg
             Overlap           {1:7.4f} deg
@@ -374,8 +565,17 @@ class SkyFields:
                         if self.dec_lim_south else 'None',
                 len(self.fields)))
 
+        return info
+
     #--------------------------------------------------------------------------
     def __len__(self):
+        """Return the number of fields.
+
+        Returns
+        -------
+        int
+            The number of fields.
+        """
 
         return len(self.fields)
 
@@ -383,7 +583,16 @@ class SkyFields:
     def _split_lat(self, dec):
         """Split a circle at a given declination into equidistant fields.
 
-        TODO"""
+        Parameters
+        ----------
+        dec : float
+            Declination in radians.
+
+        Returns
+        -------
+        ras : numpy.ndarray
+            Right asscensions of the field centers.
+        """
 
         # one field at the North/South pole:
         if np.isclose(np.absolute(dec), np.pi/2.):
@@ -402,7 +611,11 @@ class SkyFields:
     def _split_lon(self):
         """Split latitude into equidistant declinations.
 
-        TODO"""
+        Returns
+        -------
+        decs : numpy.ndarray
+            Declinations of the field centers.
+        """
 
         n = int(np.ceil(np.pi / 2. / (self.fov - self.overlap))) * 2 - 1
         decs = np.linspace(-np.pi/2., np.pi/2., n)
@@ -421,7 +634,10 @@ class SkyFields:
     def _create_fields(self):
         """Split sky into fields.
 
-        TODO"""
+        Returns
+        -------
+        None.
+        """
 
         print('Creating fields..')
 
@@ -463,7 +679,22 @@ class SkyFields:
     def get_fields(self, dec=None):
         """Return fields.
 
-        TODO"""
+        Parameters
+        ----------
+        dec : float, optional
+            Declination in radians. If specified, only fields at this
+            declination are returned. The default is None.
+
+        Raises
+        ------
+        ValueError
+            Raised if no fields at the specified declination exist.
+
+        Returns
+        -------
+        fields : list
+            List of Field instances.
+        """
 
         # no declination specified:
         if dec is None:
@@ -482,7 +713,19 @@ class SkyFields:
     def get_field_centers(self, dec=None):
         """Return field center coordinates.
 
-        TODO"""
+        Parameters
+        ----------
+        dec : float, optional
+            Declination in radians. If specified, only coordinates of fields at
+            this declination arereturned. The default is None.
+
+        Returns
+        -------
+        ras : numpy.ndarray
+            Center right ascensions of the fields.
+        decs : numpy.ndarray
+            Center declinations of the fields.
+        """
 
         ras = []
         decs = []
