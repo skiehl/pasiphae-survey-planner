@@ -334,7 +334,8 @@ class DBConnectorSQLite:
                     center_ra float,
                     center_dec float,
                     tilt float,
-                    observatory_id integer,
+                    observatory_id integer
+                        REFERENCES Observatories (observatory_id),
                     active boolean,
                     jd_next_obs_window float)
                 """
@@ -358,7 +359,8 @@ class DBConnectorSQLite:
             query = """\
                 CREATE TABLE ParameterSets(
                     parameter_set_id integer PRIMARY KEY,
-                    observatory_id integer,
+                    observatory_id integer
+                        REFERENCES Observatories (observatory_id),
                     active bool,
                     date date)
                 """
@@ -378,9 +380,12 @@ class DBConnectorSQLite:
             query = """\
                 CREATE TABLE Parameters(
                     parameter_id integer PRIMARY KEY,
-                    constraint_id integer,
-                    parameter_set_id integer,
-                    parameter_name_id integer,
+                    constraint_id integer
+                        REFERENCES Constraints (constraint_id),
+                    parameter_set_id integer
+                        REFERENCES ParameterSets (parameter_set_id),
+                    parameter_name_id integer
+                        REFERENCES ParameterNames (parameter_name_id),
                     value float,
                     svalue char(30))
                 """
@@ -400,7 +405,8 @@ class DBConnectorSQLite:
             query = """\
                 CREATE TABLE ObsWindows(
                     obswindow_id integer PRIMARY KEY,
-                    field_id integer,
+                    field_id integer
+                        REFERENCES Fields (field_id),
                     date_start date,
                     date_stop date,
                     duration float,
@@ -413,16 +419,31 @@ class DBConnectorSQLite:
             query = """\
                 CREATE TABLE Observations(
                     observation_id integer PRIMARY KEY,
-                    field_id integer,
+                    field_id integer
+                        REFERENCES Fields (field_id),
                     exposure float,
                     repetitions int,
-                    filter_id int,
+                    filter_id int
+                        REFERENCES Filters (filter_id),
                     scheduled bool,
                     done bool,
                     date date)
                 """
             self._query(connection, query, commit=True)
             print("Table 'Observations' created.")
+
+            # create Guidestars table:
+            query = """\
+                CREATE TABLE Guidestars(
+                    guidestar_id integer PRIMARY KEY,
+                    field_id integer
+                        REFERENCES Fields (field_id),
+                    ra float,
+                    dec int,
+                    active bool)
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'Guidestars' created.")
 
             # create Filters table:
             query = """\
@@ -431,7 +452,7 @@ class DBConnectorSQLite:
                     filter char(10))
                 """
             self._query(connection, query, commit=True)
-            print("Table 'Observations' created.")
+            print("Table 'Filters' created.")
 
             # define constraints:
             query = """\
@@ -441,7 +462,8 @@ class DBConnectorSQLite:
                     ('ElevationLimit'),
                     ('AirmassLimit'),
                     ('MoonDistance'),
-                    ('MoonPolarization')
+                    ('MoonPolarization'),
+                    ('PolyHADecLimit')
                 """
             self._query(connection, query, commit=True)
             print("Constraints added to table 'Constraints'.")
