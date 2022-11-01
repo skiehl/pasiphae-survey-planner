@@ -42,6 +42,13 @@ class Constraints(object):
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Returns string representation of all contained Constraint instances.
+
+        Returns
+        -------
+        text : str
+            Description of stored Constraint instances.
+        """
 
         text = 'Set of observational constraints:\n'
         for constraint in self.constraints:
@@ -51,11 +58,25 @@ class Constraints(object):
 
     #--------------------------------------------------------------------------
     def __iter__(self):
+        """Make this class iterable.
+
+        Returns
+        -------
+        Constraints
+            Instance of this class.
+        """
 
         return self
 
     #--------------------------------------------------------------------------
     def __next__(self):
+        """Return the next stored Constraint instance.
+
+        Returns
+        -------
+        Constraint
+            Constraint instance stored in the Constraints instance.
+        """
 
         if self.i >= self.size:
             raise StopIteration
@@ -126,7 +147,8 @@ class Constraint(object, metaclass=ABCMeta):
     #--------------------------------------------------------------------------
     @abstractmethod
     def __init__(self):
-        """
+        """Create Constraint instance.
+
         Notes
         -----
         Abstract method. Parameters depend on the specific constraint.
@@ -137,7 +159,8 @@ class Constraint(object, metaclass=ABCMeta):
     #--------------------------------------------------------------------------
     @abstractmethod
     def __str__(self):
-        """
+        """Description of the class instance and its parameters.
+
         Notes
         -----
         Abstract method. String depends on the specific constraint.
@@ -247,6 +270,13 @@ class ElevationLimit(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        str
+            Description of the class instance and its parameters.
+        """
 
         return 'Elevation limit: {0:.2f}'.format(self.limit)
 
@@ -319,6 +349,13 @@ class AirmassLimit(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        str
+            Description of the class instance and its parameters.
+        """
 
         return 'Airmass limit: {0:.2f}'.format(self.limit)
 
@@ -391,6 +428,13 @@ class SunDistance(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        str
+            Description of the class instance and its parameters.
+        """
 
         return 'Sun distance: {0:.2f}'.format(self.limit)
 
@@ -471,6 +515,13 @@ class MoonDistance(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        str
+            Description of the class instance and its parameters.
+        """
 
         return 'Moon distance: {0:.2f}'.format(self.limit)
 
@@ -555,6 +606,13 @@ class MoonPolarization(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        str
+            Description of the class instance and its parameters.
+        """
 
         return 'Moon polarization: {0:.2f}'.format(self.limit)
 
@@ -611,7 +669,8 @@ class MoonPolarization(Constraint):
 #==============================================================================
 
 class PolyHADecLimit(Constraint):
-    """ TODO
+    """Limits on the hourangle and declination defined by a polygon that
+    encapsulates the allowed region.
     """
 
     #--------------------------------------------------------------------------
@@ -635,6 +694,13 @@ class PolyHADecLimit(Constraint):
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        str
+            Description of the class instance and its parameters.
+        """
 
         info = dedent(
                 """\
