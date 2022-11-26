@@ -35,7 +35,19 @@ class ObsWindow:
     def __init__(self, start, stop, obs_window_id=None):
         """Time window of observability.
 
-        TODO"""
+        Parameters
+        ----------
+        start : astropy.time.Time
+            The start date and time of the observing window.
+        stop : astropy.time.Time
+            The stop date and time of the observing window.
+        obs_window_id : int, optional
+            Observing window ID as stored in the database. The default is None.
+
+        Returns
+        -------
+        None
+        """
 
         self.start = start
         self.stop = stop
@@ -44,6 +56,13 @@ class ObsWindow:
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Return information about the observing window.
+
+        Returns
+        -------
+        info : str
+            Description of the observing window.
+        """
 
         return dedent("""\
             ObsWindow
@@ -61,7 +80,7 @@ class Telescope:
     #--------------------------------------------------------------------------
     def __init__(
             self, lat, lon, height, utc_offset, name='', telescope_id=None):
-        """A telescope.
+        """Create Telescope instance.
 
         Parameters
         -----
@@ -100,6 +119,13 @@ class Telescope:
 
     #--------------------------------------------------------------------------
     def __str__(self):
+        """Return information about the telescope.
+
+        Returns
+        -------
+        info : str
+            Description of the telescope parameters.
+        """
 
         return dedent("""\
             Telescope {0}
@@ -122,6 +148,10 @@ class Telescope:
         constraint : Constraint instance
             Add a constraint that defines whether or not sources are observable
             at a given time.
+
+        Returns
+        -------
+        None
         """
 
         self.constraints.add(constraint)
@@ -232,7 +262,16 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def __init__(self, dbname):
-        """Pasiphae survey planner.
+        """Create SurveyPlanner instance.
+
+        Parameters
+        ----------
+        dbname : str
+            File name of the database.
+
+        Returns
+        -----
+        None
         """
 
         self.dbname = dbname
@@ -241,7 +280,20 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _setup_observatory(self, observatory, no_constraints=False):
-        """TBD
+        """Load telescope parameters from database and add Telescope instance
+        to SurveyPlanner.
+
+        Parameters
+        ----------
+        observatory : str
+            Observatory name as stored in the database.
+        no_constraints : bool, optional
+            If True, no constraints are loaded from the database and added to
+            the telescope. The default is False.
+
+        Returns
+        -------
+        None
         """
 
         # connect to database:
@@ -285,7 +337,18 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _tuple_to_field(self, field_tuple):
-        """TBD
+        """Convert a tuple that contains field information as queried from the
+        database to a skyfields.Field instance.
+
+        Parameters
+        ----------
+        field_tuple : tuple
+            Tuple as returned e.g. by db.get_fields().
+
+        Returns
+        -------
+        field : skyfields.Field
+            A field instance created from the database entries.
         """
 
         field_id, fov, center_ra, center_dec, tilt, __, __, \
@@ -299,7 +362,18 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _tuples_to_obs_windows(self, obs_windows_tuples):
-        """TBD
+        """Convert a tuple that contains observation window information as
+        queried from the database to an ObsWindow instance.
+
+        Parameters
+        ----------
+        obs_windows_tuples : tuple
+            Tuple as returned e.g. by db.get_obs_windows_from_to().
+
+        Returns
+        -------
+        obs_windows : ObsWindow
+            Observation window.
         """
 
         obs_windows = []
@@ -317,7 +391,22 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _iter_fields(self, observatory=None, active=True):
-        """TBD
+        """Connect to database and iterate through fields.
+
+        Parameters
+        ----------
+        observatory : str, optional
+            Iterate only through fields associated with this observatory name.
+            Otherwise, iterate through all fields. The default is None.
+        active : bool, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through all fields. The
+            default is True.
+
+        Yields
+        ------
+        field : skyfields.Field
+            Fields as stored in the database.
         """
 
         # read fields from database:
@@ -331,7 +420,23 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def add_obs_windows(self, date_stop, date_start=None):
-        """TBD
+        """Calculate observation windows for all active fields and add them to
+        the database.
+
+        Parameters
+        ----------
+        date_stop : astropy.time.Time
+            Calculate observation windows until this date. Time information is
+            truncated.
+        date_start : astropy.time.Time, optional
+            Calculate observation windows starting with this date. Time
+            information is truncated. If not set, observation windows will be
+            calculated starting with the date at which the last calculation
+            stopped. The default is None.
+
+        Returns
+        -------
+        None
         """
 
         print('Calculate observing windows until {0}..'.format(
@@ -401,7 +506,7 @@ class SurveyPlanner:
                     else:
                         print('Aborted updating of observing windows!')
 
-                        return False
+                        return None
 
                 # check that stop JD is after start JD:
                 if jd_stop < jd_start:
@@ -436,7 +541,26 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _set_field_status(self, field, date, days_before=3, days_after=7):
-        """TBD
+        """Determine and save a field's status (rising, plateauing, setting).
+
+        Parameters
+        ----------
+        field : skyfields.Field
+            A field.
+        date : astropy.time.Time
+            Date and time for which to determine the field's status.
+        days_before : int, optional
+            Determining the field's status requires the analysis of observation
+            windows in a time range. This arguments sets how many days before
+            'date' are included. The default is 3.
+        days_after : TYPE, optional
+            Determining the field's status requires the analysis of observation
+            windows in a time range. This arguments sets how many days after
+            'date' are included. The default is 7.
+
+        Returns
+        -------
+        None
         """
 
         # connect to database:
@@ -496,7 +620,36 @@ class SurveyPlanner:
     def _iter_observable_fields_by_night(
             self, observatory, night, observed=None, pending=None,
             active=True):
-        """TBD
+        """Iterate through fields observable during a given night, given
+        specific selection criteria.
+
+        Parameters
+        ----------
+        observatory : str
+            Observatory name.
+        night : astropy.time.Time
+            Iterate through fields observable during the night that starts on
+            the specified day. Time information is truncated.
+        observed : bool or None, optional
+            If True, iterate only through fields that have been observed at
+            least once. If False, iterate only through fields that have never
+            been observed. If None, iterate through fields irregardless of
+            whether they have  been observed or not. The default is None.
+        pending : bool or None, optional
+            If True, iterate only through fields that have pending observations
+            associated. If False, only iterate through fields that have no
+            pending observations associated. If None, iterate through fields
+            irregardless of whether they have pending observations associated
+            or not. The default is None.
+        active : bool or None, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through fields active or
+            not. The default is True.
+
+        Yields
+        ------
+        field : skyfields.Field
+            Field(s) fulfilling the selected criteria.
         """
 
         # check that night input is date only:
@@ -543,7 +696,35 @@ class SurveyPlanner:
     def _iter_observable_fields_by_datetime(
             self, observatory, datetime, observed=None, pending=None,
             active=True):
-        """TBD
+        """Iterate through fields observable during a given night, given
+        specific selection criteria.
+
+        Parameters
+        ----------
+        observatory : str
+            Observatory name.
+        datetime : astropy.time.Time
+            Iterate through fields that are observable at the given time.
+        observed : bool or None, optional
+            If True, iterate only through fields that have been observed at
+            least once. If False, iterate only through fields that have never
+            been observed. If None, iterate through fields irregardless of
+            whether they have  been observed or not. The default is None.
+        pending : bool or None, optional
+            If True, iterate only through fields that have pending observations
+            associated. If False, only iterate through fields that have no
+            pending observations associated. If None, iterate through fields
+            irregardless of whether they have pending observations associated
+            or not. The default is None.
+        active : bool or None, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through fields active or
+            not. The default is True.
+
+        Yields
+        ------
+        field : skyfields.Field
+            Field(s) fulfilling the selected criteria.
         """
 
         # connect to database:
@@ -573,7 +754,41 @@ class SurveyPlanner:
     def iter_observable_fields(
             self, observatory, night=None, datetime=None, observed=None,
             pending=None, active=True):
-        """TBD
+        """Iterate through fields observable during a given night or at a
+        specific time, given specific selection criteria.
+
+        Parameters
+        ----------
+        observatory : str
+            Observatory name.
+        night : astropy.time.Time, optional
+            Iterate through fields observable during the night that starts on
+            the specified day. Time information is truncated. Either set this
+            argument or 'datetime'. If this argument is set, 'datetime' is not
+            used.
+        datetime : astropy.time.Time, optional
+            Iterate through fields that are observable at the given time.
+            Either set this argument or 'night'.
+        observed : bool or None, optional
+            If True, iterate only through fields that have been observed at
+            least once. If False, iterate only through fields that have never
+            been observed. If None, iterate through fields irregardless of
+            whether they have  been observed or not. The default is None.
+        pending : bool or None, optional
+            If True, iterate only through fields that have pending observations
+            associated. If False, only iterate through fields that have no
+            pending observations associated. If None, iterate through fields
+            irregardless of whether they have pending observations associated
+            or not. The default is None.
+        active : bool or None, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through fields active or
+            not. The default is True.
+
+        Yields
+        ------
+        field : skyfields.Field
+            Field(s) fulfilling the selected criteria.
         """
 
         # check input:
@@ -589,13 +804,47 @@ class SurveyPlanner:
 
         else:
             raise ValueError(
-                    "Either provide 'night' or 'time' argument.")
+                    "Either provide 'night' or 'datetime' argument.")
 
     #--------------------------------------------------------------------------
     def get_observable_fields(
             self, observatory, night=None, datetime=None, observed=None,
             pending=None, active=True):
-        """TBD
+        """Get a list of fields observable during a given night or at a
+        specific time, given specific selection criteria.
+
+        Parameters
+        ----------
+        observatory : str
+            Observatory name.
+        night : astropy.time.Time, optional
+            Iterate through fields observable during the night that starts on
+            the specified day. Time information is truncated. Either set this
+            argument or 'datetime'. If this argument is set, 'datetime' is not
+            used.
+        datetime : astropy.time.Time, optional
+            Iterate through fields that are observable at the given time.
+            Either set this argument or 'night'.
+        observed : bool or None, optional
+            If True, iterate only through fields that have been observed at
+            least once. If False, iterate only through fields that have never
+            been observed. If None, iterate through fields irregardless of
+            whether they have  been observed or not. The default is None.
+        pending : bool or None, optional
+            If True, iterate only through fields that have pending observations
+            associated. If False, only iterate through fields that have no
+            pending observations associated. If None, iterate through fields
+            irregardless of whether they have pending observations associated
+            or not. The default is None.
+        active : bool or None, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through fields active or
+            not. The default is True.
+
+        Returns
+        ------
+        observable_fields : list of skyfields.Field
+            Field(s) fulfilling the selected criteria.
         """
 
         observable_fields = [field for field in self.iter_observable_fields(
@@ -606,7 +855,27 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def get_night_start_end(self, observatory, datetime):
-        """TBD
+        """Get the start and stop time of a night for a given date.
+
+        Parameters
+        ----------
+        observatory : str
+            Observatory name as stored in the database.
+        datetime : astropy.time.Time
+            The night starting on that date is considered. Time information is
+            truncated.
+
+        Returns
+        -------
+        night_start : astropy.time.Time
+            Start date and time of the night.
+        night_stop : astropy.time.Time
+            Stop date and time of the night.
+
+        Notes
+        -----
+        The start and stop time depends on the definition of the twilight. This
+        is set as fixed parameter in the database.
         """
 
         datetime = datetime.to_datetime()
@@ -623,7 +892,34 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def iter_fields(
             self, observatory=None, observed=None, pending=None, active=True):
-        """TBD
+        """Iterate through fields, given specific selection criteria.
+
+        Parameters
+        ----------
+        observatory : str, optional
+            Iterate only through fields associated with this observatory.
+            If None, iterate through all fields irregardless of the associated
+            observatory.
+        observed : bool or None, optional
+            If True, iterate only through fields that have been observed at
+            least once. If False, iterate only through fields that have never
+            been observed. If None, iterate through fields irregardless of
+            whether they have  been observed or not. The default is None.
+        pending : bool or None, optional
+            If True, iterate only through fields that have pending observations
+            associated. If False, only iterate through fields that have no
+            pending observations associated. If None, iterate through fields
+            irregardless of whether they have pending observations associated
+            or not. The default is None.
+        active : bool or None, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through fields active or
+            not. The default is True.
+
+        Yields
+        ------
+        field : skyfields.Field
+            Field(s) fulfilling the selected criteria.
         """
 
         # connect to database:
@@ -637,7 +933,31 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def get_fields(
             self, observatory=None, observed=None, pending=None, active=True):
-        """TBD
+        """Get a list of fields, given specific selection criteria.
+
+        Parameters
+        ----------
+        observatory : str, optional
+            Only get fields associated with this observatory. If None, get all
+            fields irregardless of the associated observatory.
+        observed : bool or None, optional
+            If True, only get fields that have been observed at least once. If
+            False, only get fields that have never been observed. If None, get
+            fields irregardless of whether they have  been observed or not. The
+            default is None.
+        pending : bool or None, optional
+            If True, only get fields that have pending observations associated.
+            If False, only get fields that have no pending observations
+            associated. If None, get fields irregardless of whether they have
+            pending observations associated or not. The default is None.
+        active : bool or None, optional
+            If True, only get active fields. If False, only get inactive
+            fields. If None, get fields active or not. The default is True.
+
+        Yields
+        ------
+        field : list of skyfields.Field
+            Field(s) fulfilling the selected criteria.
         """
 
         fields = [field for field in self.iter_fields(
@@ -648,7 +968,22 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def get_field_by_id(self, field_id):
-        """TBD
+        """Get a field by its database ID.
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the field as stored in the database.
+
+        Raises
+        ------
+        ValueError
+            Raise if no field with this ID exists.
+
+        Returns
+        -------
+        field : skyfields.Field
+            Field as stored in the database under specified ID.
         """
 
         # connect to database:
@@ -667,7 +1002,44 @@ class SurveyPlanner:
     def _count_neighbors(
             self, radius, field_id, observatory=None, observed=None,
             pending=None, active=True, return_neighbor_ids=False):
-        """TBD
+        """Count the neighbors of a specific field given various criteria.
+
+        Parameters
+        ----------
+        radius : astropy.units.Quantity
+            Radius in which to count field neighbors. Needs to be a Quantity
+            with unit 'rad' or 'deg'.
+        field_id : int
+            ID of the field whose neighbors are searched for.
+        observatory : str, optional
+            Only count fields associated with this observatory. If None, count
+            all fields irregardless of the associated observatory.
+        observed : bool or None, optional
+            If True, only count fields that have been observed at least once.
+            If False, only count fields that have never been observed. If None,
+            count fields irregardless of whether they have been observed or
+            not. The default is None.
+        pending : bool or None, optional
+            If True, only count fields that have pending observations
+            associated. If False, only count fields that have no pending
+            observations associated. If None, count fields irregardless of
+            whether they have pending observations associated or not. The
+            default is None.
+        active : bool or None, optional
+            If True, only count active fields. If False, only count inactive
+            fields. If None, count fields active or not. The default is True.
+        return_neighbor_ids : bool, optional
+            If True, the neighbor IDs are returnd as well. The default is
+            False.
+
+        Returns
+        -------
+        count : int
+            Number of field neighbors within the specified radius that fulfill
+            the conditions.
+        neighbor_ids : np.ndarray
+            IDs of the neighbors fulfilling the conditions. Only returned if
+            'return_neighbor_ids' is True.
         """
 
         # get coordinates of field of interest:
@@ -708,7 +1080,39 @@ class SurveyPlanner:
     def count_neighbors(
             self, radius, field_ids, observatory=None, observed=None,
             pending=None, active=True):
-        """TBD
+        """Count the neighbors of specificied fields given various criteria.
+
+        Parameters
+        ----------
+        radius : astropy.units.Quantity
+            Radius in which to count field neighbors. Needs to be a Quantity
+            with unit 'rad' or 'deg'.
+        field_ids : int or list
+            ID of the field whose neighbors are searched for. Or list of
+            multiple such IDs.
+        observatory : str, optional
+            Only count fields associated with this observatory. If None, count
+            all fields irregardless of the associated observatory.
+        observed : bool or None, optional
+            If True, only count fields that have been observed at least once.
+            If False, only count fields that have never been observed. If None,
+            count fields irregardless of whether they have been observed or
+            not. The default is None.
+        pending : bool or None, optional
+            If True, only count fields that have pending observations
+            associated. If False, only count fields that have no pending
+            observations associated. If None, count fields irregardless of
+            whether they have pending observations associated or not. The
+            default is None.
+        active : bool or None, optional
+            If True, only count active fields. If False, only count inactive
+            fields. If None, count fields active or not. The default is True.
+
+        Returns
+        -------
+        neighbor_count : list of int
+            Lists the number of field neighbors within the specified radius
+            that fulfill the conditions for each of the input field IDs.
         """
 
         if isinstance(field_ids, int):
@@ -729,6 +1133,5 @@ class SurveyPlanner:
             raise ValueError("'field_ids' has to be int or list.")
 
         return neighbor_count
-
 
 #==============================================================================
