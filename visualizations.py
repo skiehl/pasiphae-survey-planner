@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Visualizations for the survey planner.
+"""Visualizations for the Pasiphae survey planner.
 """
 
 import cartopy.crs as ccrs

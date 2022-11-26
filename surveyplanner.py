@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #!/usr/bin/env python
-"""Sky fields for the pasiphae survey.
+"""Pasiphae survey planner.
 """
 
 from astropy.coordinates import AltAz, Angle, EarthLocation, get_sun, SkyCoord

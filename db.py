@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #!/usr/bin/env python
-"""Sky fields for the pasiphae survey.
+"""Database interface for the Pasiphae survey planner.
 """
 
 from astropy.time import Time
@@ -32,21 +32,41 @@ class SQLiteConnection:
     python with-statement."""
 
     def __init__(self, db_file):
-        """Wrapper class for SQLite connection that allows the use of the
-        python with-statement.
+        """Create SQLiteConnection instance.
 
-        TODO
+        Parameters
+        ----------
+        db_file : str
+            SQLite3 database file name.
+
+        Returns
+        -------
+        None
         """
 
         self.db_file = db_file
 
     def __enter__(self):
+        """Open database connection and return it.
+
+        Returns
+        -------
+        sqlite3.Connection
+            Open database connection.
+        """
 
         self.connection = sqlite3.connect(self.db_file)
 
         return self.connection
 
     def __exit__(self, type, value, traceback):
+        """Close database connection.
+
+        Returns
+        -------
+        None
+        """
+
         self.connection.close()
 
 #==============================================================================
@@ -56,19 +76,40 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def __init__(self, db_file):
-        """SQLite database connector."""
+        """Create DBConnectorSQLite instance.
+
+        Parameters
+        ----------
+        db_file : str
+            SQLite3 database file name.
+
+        Returns
+        -------
+        None
+        """
 
         self.db_file = db_file
 
     #--------------------------------------------------------------------------
-    #def _connect(self):
-    #    """TODO"""
-    #
-    #    self.connection
-
-    #--------------------------------------------------------------------------
     def _query(self, connection, query, many=False, commit=False):
-        """TODO"""
+        """Query the database.
+
+        Parameters
+        ----------
+        connection : sqlite3.Connection
+            The database connection.
+        query : str
+            SQL query.
+        many : list, optional
+            List of data to add in a single commit. The default is False.
+        commit : bool, optional
+            Set True to commit to database. The default is False.
+
+        Returns
+        -------
+        result : sqlite3.Cursor
+            Query results.
+        """
 
         cursor = connection.cursor()
         if many is False:
@@ -83,7 +124,23 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _get_observatory_id(self, name):
-        """TODO"""
+        """Get the observatory ID by name.
+
+        Parameters
+        ----------
+        name : std
+            Observatory name.
+
+        Raises
+        ------
+        NotInDatabase
+            Raised if observatory name does not exist in database.
+
+        Returns
+        -------
+        observatory_id : int
+            The ID of the observatory in the database.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
@@ -101,7 +158,18 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _get_parameter_set_id(self, observatory_id):
-        """TODO"""
+        """Get the parameter set ID associated with an observatory ID.
+
+        Parameters
+        ----------
+        observatory_id : int
+            Observatory ID.
+
+        Returns
+        -------
+        parameter_set_id : int
+            Parameter set ID.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
@@ -121,7 +189,16 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _inactivate_parameter_set(self, parameter_set_id):
-        """TODO
+        """Set a parameter set to inactive.
+
+        Parameters
+        ----------
+        parameter_set_id : int
+            Parameter set ID.
+
+        Returns
+        -------
+        None
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -135,7 +212,18 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _last_insert_id(self, connection):
-        """TODO"""
+        """Get the last inserted ID.
+
+        Parameters
+        ----------
+        connection : sqlite3.Connection
+            The database connection.
+
+        Returns
+        -------
+        last_insert_id : int
+            The last inserted ID.
+        """
 
         query = """SELECT last_insert_rowid()"""
         result = self._query(connection, query).fetchone()
@@ -145,7 +233,23 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _get_constraint_id(self, constraint_name):
-        """TODO"""
+        """Get the constraint ID by constraint name.
+
+        Parameters
+        ----------
+        constraint_name : str
+            Constraint name.
+
+        Raises
+        ------
+        NotInDatabase
+            Raised if constraint name does not exist in database.
+
+        Returns
+        -------
+        constraint_id : int
+            Constraint ID.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
@@ -164,7 +268,18 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _get_parameter_name_id(self, parameter_name):
-        """TODO"""
+        """Get the parameter name ID by parameter name.
+
+        Parameters
+        ----------
+        parameter_name : str
+            Parameter name.
+
+        Returns
+        -------
+        parameter_name_id : int
+            Parameter name ID.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
 
@@ -196,7 +311,25 @@ class DBConnectorSQLite:
     def _add_parameter(
             self, constraint_id, parameter_set_id, parameter_name, value=None,
             svalue=None):
-        """TODO"""
+        """Add a parameter to the database.
+
+        Parameters
+        ----------
+        constraint_id : int
+            ID of the constraint associated with the parameter.
+        parameter_set_id : int
+            ID of the associated parameter set.
+        parameter_name : str
+            Parameter name.
+        value : float, optional
+            The numerical value to be stored. The default is None.
+        svalue : str, optional
+            The string value to be stored. The default is None.
+
+        Returns
+        -------
+        None
+        """
 
         parameter_name_id = self._get_parameter_name_id(parameter_name)
 
@@ -216,7 +349,18 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _add_parameter_set(self, observatory):
-        """TODO"""
+        """Add a parameter set to the database.
+
+        Parameters
+        ----------
+        observatory : str
+            Name of the associated observatory.
+
+        Returns
+        -------
+        parameter_set_id : int
+            ID of the newly added parameter set.
+        """
 
         # check if active parameter set exists:
         observatory_id = self._get_observatory_id(observatory)
@@ -250,7 +394,26 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _add_twilight(self, twilight, parameter_set_id):
-        """TODO"""
+        """Add the twilight condition.
+
+        Parameters
+        ----------
+        twilight : float or str
+            If str, must be 'astronomical' (-18 deg), 'nautical' (-12 deg),
+            'civil' (-6 deg), or 'sunset' (0 deg). Use float otherwise.
+        parameter_set_id : int
+            ID of the associated parameter set.
+
+        Raises
+        ------
+        ValueError
+            Raised if value of 'twilight' is neither float or one of the four
+            allowed strings.
+
+        Returns
+        -------
+        None
+        """
 
         # parse input:
         if isinstance(twilight, float):
@@ -276,7 +439,25 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _add_constraint(self, constraint, parameter_set_id):
-        """TODO"""
+        """Add constraint to database.
+
+        Parameters
+        ----------
+        constraint : constraints.Constraint
+            An observational constraint.
+        parameter_set_id : TYPE
+            ID of the associated parameter set.
+
+        Raises
+        ------
+        ValueError
+            Raised if the constraint returns anything but string, float, or int
+            as parameters.
+
+        Returns
+        -------
+        None
+        """
 
         # get constraint ID:
         constraint_name = constraint.__class__.__name__
@@ -300,8 +481,66 @@ class DBConnectorSQLite:
                             "constraint get_params() method.")
 
     #--------------------------------------------------------------------------
+    def _add_filter(self, filter_name):
+        """Add a filter to the database.
+
+        Parameters
+        ----------
+        filter_name : str
+            Filter name. Must be a unique identifier in the database.
+
+        Returns
+        -------
+        last_insert_id : int
+            The last inserted ID.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO Filters (filter)
+                VALUES ('{0}')
+                """.format(filter_name)
+            self._query(connection, query, commit=True)
+            last_insert_id = self._last_insert_id(connection)
+
+        return last_insert_id
+
+    #--------------------------------------------------------------------------
+    def _add_observation(self, field_id, exposure, repetitions, filter_id):
+        """Add observation to database.
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the associated field.
+        exposure : float
+            Exposure time in seconds.
+        repetitions : int
+            Number of repetitions.
+        filter_id : int
+            Filter ID.
+
+        Returns
+        -------
+        None
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO Observations (
+                    field_id, exposure, repetitions, filter_id)
+                VALUES ({0}, {1}, {2}, {3});
+                """.format(field_id, exposure, repetitions, filter_id)
+            self._query(connection, query, commit=True)
+
+    #--------------------------------------------------------------------------
     def create_db(self):
-        """TODO"""
+        """Create sqlite3 database.
+
+        Returns
+        -------
+        None
+        """
 
         create = False
 
@@ -470,7 +709,25 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def add_observatory(self, name, lat, lon, height, utc_offset):
-        """TODO"""
+        """Add observatory to database.
+
+        Parameters
+        ----------
+        name : str
+            Observatory name. Must be a unique identifier in the database.
+        lat : float
+            Observatory latitude in radians.
+        lon : float
+            Observatory longitude in radians.
+        height : float
+            Observatory height in meters.
+        utc_offset : int
+            Observatory UTC offset (daylight saving time).
+
+        Returns
+        -------
+        None
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             # check if name exists:
@@ -496,7 +753,18 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def get_observatory(self, name):
-        """TODO"""
+        """Get observatory from database.
+
+        Parameters
+        ----------
+        name : str
+            Observatory name.
+
+        Returns
+        -------
+        telescope : surveyplanner.Telescope
+            The telescope with parameters as stored in the database.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
@@ -517,7 +785,17 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def iter_observatories(self):
-        """TODO"""
+        """Iterate through observatories stored in database.
+
+        Yields
+        ------
+        i : int
+            Iteratively increasing counter.
+        n : int
+            Number of observatories stored in the database.
+        telescope : surveyplanner.telescope
+            The telescope with parameters as stored in the database.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
@@ -539,11 +817,27 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def add_fields(self, fields, observatory, active=True):
-        """TODO
+        """Add fields to the database.
 
-        Note: Adding multiple fields at a time might be faster. However,
-        finding the optimal number requires test and we do not add fields
-        regularly. Therefore, a simple insertion loop is used.
+        Parameters
+        ----------
+        fields : skyfields.Fields
+            The fields to add.
+        observatory : str
+            Name of the observatory associated with the fields.
+        active : bool, optional
+            If True, fields are added as active, and as inactive otherwise. The
+            default is True.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Adding multiple fields at a time might be faster. However, finding the
+        optimal number requires test and we do not add fields regularly.
+        Therefore, a simple insertion loop is used.
         """
 
         observatory_id = self._get_observatory_id(observatory)
@@ -579,7 +873,35 @@ class DBConnectorSQLite:
     #--------------------------------------------------------------------------
     def get_fields(
             self, observatory=None, observed=None, pending=None, active=True):
-        """TODO"""
+        """Get fields from the database, given various selection criteria.
+
+        Parameters
+        ----------
+        observatory : str, optional
+            Observatory name. If set, only query fields associated with this
+            observatory. If None, query fields for all observatories. The
+            default is None.
+        observed : bool, optional
+            If True, only query fields that have been observed at least once.
+            If False, only query fields that have never been observed. In None,
+            query fields independend of the observation status. The default is
+            None.
+        pending : bool, optional
+            If True, only query fields that have pending observations
+            associated. If False, only query fields that have no pending
+            observations associated. If None, query fields independent of
+            whether observations are pending or not. The default is None.
+        active : bool, optional
+            If True, only query active fields. If False, only query inactive
+            fields. If None, query fields independent of whether they are
+            active or not. The default is True.
+
+        Returns
+        -------
+        result : list of tuples
+            List of the queried fields. Each tuple contains the field
+            parameters.
+        """
 
         # set query condition for observed or not:
         if observed is None:
@@ -630,7 +952,45 @@ class DBConnectorSQLite:
     #--------------------------------------------------------------------------
     def iter_fields(
             self, observatory=None, observed=None, pending=None, active=True):
-        """TODO"""
+        """Query fields from the database, given various selection criteria,
+        and iterate through the results.
+
+        Parameters
+        ----------
+        observatory : str, optional
+            Observatory name. If set, only query fields associated with this
+            observatory. If None, query fields for all observatories. The
+            default is None.
+        observed : bool, optional
+            If True, only query fields that have been observed at least once.
+            If False, only query fields that have never been observed. In None,
+            query fields independend of the observation status. The default is
+            None.
+        pending : bool, optional
+            If True, only query fields that have pending observations
+            associated. If False, only query fields that have no pending
+            observations associated. If None, query fields independent of
+            whether observations are pending or not. The default is None.
+        active : bool, optional
+            If True, only query active fields. If False, only query inactive
+            fields. If None, query fields independent of whether they are
+            active or not. The default is True.
+
+        Yields
+        ------
+        i : int
+            Iteratively increasing counter.
+        n : int
+            Total number of queried fields.
+        field : tuple
+            The tuple contains the field parameters.
+
+        Notes
+        -----
+        This method first uses the get_fields() method to get the total number
+        of fields. There is no memory advantage in using this iterator over the
+        get_fields() method.
+        """
 
         fields = self.get_fields(
                 observatory=observatory, observed=observed, pending=pending,
@@ -642,7 +1002,19 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def get_field_by_id(self, field_id):
-        """TODO"""
+        """Query field from database by ID.
+
+        Parameters
+        ----------
+        field_id : int
+            Field ID.
+
+        Returns
+        -------
+        result : list of tuple
+            The list contains only one tuple. The tuple contains the field
+            parameters.
+        """
 
         # query data base:
         with SQLiteConnection(self.db_file) as connection:
@@ -668,7 +1040,23 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def add_constraints(self, observatory, twilight, constraints=()):
-        """TODO"""
+        """Add constraints to database.
+
+        Parameters
+        ----------
+        observatory : str
+            Name of the observatory that the constraints are associated with.
+        twilight : float or str
+            If str, must be 'astronomical' (-18 deg), 'nautical' (-12 deg),
+            'civil' (-6 deg), or 'sunset' (0 deg). Use float otherwise.
+        constraints : list or tuple of constraints.Constraint, optional
+            The constraints to be added to the database for the specified
+            observatory. The default is ().
+
+        Returns
+        -------
+        None
+        """
 
         # add parameter set:
         parameter_set_id = self._add_parameter_set(observatory)
@@ -682,7 +1070,26 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def get_constraints(self, observatory):
-        """TODO"""
+        """Query constraints associated with a specified observatory from the
+        database
+
+        Parameters
+        ----------
+        observatory : str
+            Name of the observatory.
+
+        Raises
+        ------
+        NotInDatabase
+            Raised if no parameter set is stored for the specified observatory.
+
+        Returns
+        -------
+        constraints : dict of dict
+            Dictionary of the constraints. The keys are the constraint names.
+            The values are dictionaries that contain the constraint parameter
+            names as keys and associated values.
+        """
 
         observatory_id = self._get_observatory_id(observatory)
         parameter_set_id = self._get_parameter_set_id(observatory_id)
@@ -727,7 +1134,24 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def add_obs_window(self, field_id, date_start, date_stop, active=True):
-        """TODO"""
+        """Add observation window for a specific field to database.
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the field that the observation window is associated with.
+        date_start : astropy.time.Time
+            Start date and time of the observing window.
+        date_stop : astropy.time.Time
+            Stop date and time of the observing window.
+        active : bool, optional
+            If True, the observing windows is added as active, as inactive
+            otherwise. The default is True.
+
+        Returns
+        -------
+        None
+        """
 
         duration = (date_stop - date_start).value
 
@@ -743,7 +1167,20 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def update_next_obs_window(self, field_id, jd):
-        """TODO"""
+        """Update a field's database entry for the next observing window.
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the associated field.
+        jd : float
+            Julian date of the next day for which the next observing window
+            needs to be calculated for the specified field.
+
+        Returns
+        -------
+        None
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             # add observatory to database:
@@ -756,7 +1193,25 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def get_obs_windows_from_to(self, field_id, date_start, date_stop):
-        """TODO"""
+        """Query observing window from the database for a specified field
+        between a start and a stop date.
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the field whose observing windows are queried.
+        date_start : astropy.time.Time
+            Query observing windows later than this time.
+        date_stop : astropy.time.Time
+            Query observing windows earlier than this time.
+
+        Returns
+        -------
+        obs_windows : list of tuples
+            List of the queried observing windows. Each tuple contains the
+            observing window ID, the field ID, start and stop date, duration,
+            and active status.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
@@ -771,7 +1226,26 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def get_obs_windows_by_datetime(self, field_id, datetime):
-        """TODO"""
+        """Query observing window from the database for a specified field
+        for a specific date and time.
+
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the field whose observing windows are queried.
+        datetime : astropy.time.Time
+            Query the observing window that includes the specified datetime.
+
+        Returns
+        -------
+        obs_window : list of tuples
+            List of the queried observing windows. The list contains either no
+            tuple, if no observing window includes the specified datetime, or
+            one tuple for the resulting observing window. The tuple contains
+            the observing window ID, the field ID, start and stop date,
+            duration, and active status.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
@@ -786,7 +1260,23 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def get_obs_window_durations(self, field_id, date_start, date_stop):
-        """TODO"""
+        """Query the durations of observing window from the database for a
+        specified field between a start and a stop date.
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the field whose observing windows are queried.
+        date_start : astropy.time.Time
+            Query observing windows later than this time.
+        date_stop : astropy.time.Time
+            Query observing windows earlier than this time.
+
+        Returns
+        -------
+        durations : list
+            The durations of the queried observing windows in days.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
@@ -800,22 +1290,24 @@ class DBConnectorSQLite:
         return durations
 
     #--------------------------------------------------------------------------
-    def _add_filter(self, filter_name):
-        """TODO"""
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO Filters (filter)
-                VALUES ('{0}')
-                """.format(filter_name)
-            self._query(connection, query, commit=True)
-            last_insert_id = self._last_insert_id(connection)
-
-        return last_insert_id
-
-    #--------------------------------------------------------------------------
     def get_filter_id(self, filter_name):
-        """TODO"""
+        """Get the filter ID by the filter name.
+
+        Parameters
+        ----------
+        filter_name : str
+            Filter name.
+
+        Returns
+        -------
+        filter_id : int
+            Filter ID.
+
+        Notes
+        -----
+        If the filter name does not exist in the database, the user is asked
+        whether or not to add it.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
@@ -841,20 +1333,29 @@ class DBConnectorSQLite:
         return filter_id
 
     #--------------------------------------------------------------------------
-    def _add_observation(self, field_id, exposure, repetitions, filter_id):
-        """TODO"""
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO Observations (
-                    field_id, exposure, repetitions, filter_id)
-                VALUES ({0}, {1}, {2}, {3});
-                """.format(field_id, exposure, repetitions, filter_id)
-            self._query(connection, query, commit=True)
-
-    #--------------------------------------------------------------------------
     def get_observations(self, field_id, exposure, repetitions, filter_id):
-        """TODO"""
+        """Query an observation from the database.
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the associated field.
+        exposure : float
+            Exposure time in seconds.
+        repetitions : int
+            Number of repetitions.
+        filter_id : int
+            Filter ID.
+
+        Returns
+        -------
+        results : list of tuples
+            The list is empty if no observation was found. Otherwise, the list
+            contains one tuple. The tuple contains the observation ID, field
+            ID, exposure time in seconds, number of repetitions, filter_id,
+            its scheduling status, its observation status, the datetime of
+            the observation if it was finished.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
@@ -870,7 +1371,23 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def add_observations(self, field_id, exposure, repetitions, filter_name):
-        """TODO"""
+        """Add observation to database.
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the associated field.
+        exposure : float
+            Exposure time in seconds.
+        repetitions : int
+            Number of repetitions.
+        filter_name : str
+            Filter name.
+
+        Returns
+        -------
+        None
+        """
 
         # prepare field_ids:
         if isinstance(field_id, int):
@@ -983,7 +1500,22 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _check_observation_status(self, observation_id):
-        """TODO"""
+        """Get the status of an observation.
+
+        Parameters
+        ----------
+        observation_id : int
+            ID of the observation.
+
+        Returns
+        -------
+        exists : bool
+            True, if observation with specified ID exists. False, otherwise.
+        scheduled : bool
+            True, if observation is marked as scheduled. False, otherwise.
+        done : bool
+            True, if observation is marked as finished. False, otherwise.
+        """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
@@ -1004,7 +1536,31 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def _set_observed_by_id(self, observation_id, date=None):
-        """TODO"""
+        """Set an observation as observed.
+
+        Parameters
+        ----------
+        observation_id : int or list of ints
+            Observation ID(s) that should be marked as observed.
+        date : astropy.time.Time or list therof, optional
+            Date and time of the observation. If not provided, the current
+            time when the observation is marked as observed is stored. The
+            default is None.
+
+        Raises
+        ------
+        ValueError
+            Raised if 'observation_id' is not an int or list.
+        ValueError
+            Raised if 'date' is not an astropy.time.Time instance, list, or
+            None.
+        ValueError
+            If the number of IDs and dates does not match.
+
+        Returns
+        -------
+        None
+        """
 
         # check input:
         if isinstance(observation_id, int):
@@ -1026,6 +1582,11 @@ class DBConnectorSQLite:
         else:
             raise ValueError(
                     "'date' must be astropy.Time or list of astropy.Time.")
+
+        if len(observation_ids) != len(dates):
+            raise ValueError(
+                    "The same number of IDs and dates must be provided or "
+                    "a single ID and/or date.")
 
         count_set = 0
 
@@ -1064,7 +1625,48 @@ class DBConnectorSQLite:
     #--------------------------------------------------------------------------
     def _set_observed_by_params(
             self, field_id, exposure, repetitions, filter_name, date=None):
-        """TODO"""
+        """Set a field's observations identified by the observations's
+        parameters as observed.
+
+        Parameters
+        ----------
+        field_id : int or list of ints
+            Field ID.
+        exposure : float or list of floats
+            Exposure time in seconds.
+        repetitions : int or list of ints
+            Number of repetitions.
+        filter_name : str or list of str
+            Filter name.
+        date : astropy.time.Time or list therof, optional
+            Date and time of the observation. If not provided, the current
+            time when the observation is marked as observed is stored. The
+            default is None.
+
+        Raises
+        ------
+        ValueError
+            Raised if 'field_id' is not int or list.
+        ValueError
+            Raised if 'exposure' is not float or list.
+        ValueError
+            Raised if 'exposure' is list and its length does not match the
+            number of field IDs.
+        ValueError
+            Raised if 'repetitions' is not int or list.
+        ValueError
+            Raised if 'repetitions' is list and its length does not match the
+            number of field IDs.
+        ValueError
+            Raised if 'filter_name' is not str or list.
+        ValueError
+            Raised if 'filter_names' is list and its length does not match the
+            number of field IDs.
+
+        Returns
+        -------
+        None
+        """
 
         # check input:
         if isinstance(field_id, int):
@@ -1079,21 +1681,30 @@ class DBConnectorSQLite:
         if exposure is None or isinstance(exposure, float):
             exposure = [exposure] * n_fields
         elif isinstance(exposure, list):
-            pass
+            if len(exposure) != len(field_ids):
+                raise ValueError(
+                        "Number of field IDs and exposure entries does not "
+                        "match.")
         else:
             raise ValueError("'exposure' must be float or list of float.")
 
         if repetitions is None or isinstance(repetitions, int):
             repetitions = [repetitions] * n_fields
         elif isinstance(repetitions, list):
-            pass
+            if len(exposure) != len(field_ids):
+                raise ValueError(
+                        "Number of field IDs and repetion entries does not "
+                        "match.")
         else:
             raise ValueError("'repetitions' must be int or list of int.")
 
         if filter_name is None or isinstance(filter_name, str):
             filter_name = [filter_name] * n_fields
         elif isinstance(filter_name, list):
-            pass
+            if len(exposure) != len(field_ids):
+                raise ValueError(
+                        "Number of field IDs and filter entries does not "
+                        "match.")
         else:
             raise ValueError("'filter_name' must be str or list of str.")
 
@@ -1147,6 +1758,8 @@ class DBConnectorSQLite:
                 if userin == 'A':
                     for result in results:
                         observation_ids.append(result[0])
+                        # TODO : BUG-fix: if list of dates is provided for all observations, the list of IDs will not match the list of dates and this will crash the next called method. I need to change the list of dates in this case as well.
+
                 else:
                     try:
                         userin = int(userin)
@@ -1180,7 +1793,32 @@ class DBConnectorSQLite:
     def set_observed(
             self, observation_id=None, field_id=None, exposure=None,
             repetitions=None, filter_name=None, date=None):
-        """TODO"""
+        """Mark an observation as finished. Select observation either by its ID
+        or by its parameters.
+
+        Parameters
+        ----------
+        observation_id : int or list of ints or None
+            Observation ID(s) that should be marked as observed. If None, the
+            other arguments must be set to idenfy the observation(s). The
+            default is None.
+        field_id : int or list of ints
+            Field ID. The default is None.
+        exposure : float or list of floats
+            Exposure time in seconds. The default is None.
+        repetitions : int or list of ints
+            Number of repetitions. The default is None.
+        filter_name : str or list of str
+            Filter name. The default is None.
+        date : astropy.time.Time or list therof, optional
+            Date and time of the observation. If not provided, the current
+            time when the observation is marked as observed is stored. The
+            default is None.
+
+        Returns
+        -------
+        None
+        """
 
         if observation_id is None:
             self._set_observed_by_params(

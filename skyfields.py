@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #!/usr/bin/env python
-"""Sky fields for the pasiphae survey.
+"""Sky fields for the Pasiphae survey.
 """
 
 from astropy.coordinates import Angle, SkyCoord
