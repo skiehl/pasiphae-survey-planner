@@ -451,8 +451,8 @@ class DBConnectorSQLite:
         Raises
         ------
         ValueError
-            Raised if the constraint returns anything but string, float, or int
-            as parameters.
+            Raised if the constraint returns anything but string, float, int,
+            or list as parameters.
 
         Returns
         -------
@@ -465,7 +465,13 @@ class DBConnectorSQLite:
 
         # iterate through parameters:
         for param, value in constraint.get_params().items():
-            if isinstance(value, str):
+            if isinstance(value, list):
+                for val in value:
+                    self._add_parameter(
+                            constraint_id, parameter_set_id, param,
+                            value=val)
+
+            elif isinstance(value, str):
                 self._add_parameter(
                         constraint_id, parameter_set_id, param,
                         svalue=value)
@@ -1127,6 +1133,13 @@ class DBConnectorSQLite:
 
             if value is None:
                 constraints[constraint_name][param_name] = svalue
+            elif (param_name in constraints[constraint_name] and not
+                  isinstance(constraints[constraint_name][param_name], list)):
+                constraints[constraint_name][param_name] = [
+                        constraints[constraint_name][param_name]]
+                constraints[constraint_name][param_name].append(value)
+            elif param_name in constraints[constraint_name]:
+                constraints[constraint_name][param_name].append(value)
             else:
                 constraints[constraint_name][param_name] = value
 

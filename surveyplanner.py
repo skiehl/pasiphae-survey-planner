@@ -111,7 +111,7 @@ class Telescope:
         self.loc = EarthLocation(
                 lat=lat, lon=lon, height=height)
         self.name = name
-        self.utc_offset = TimeDelta(utc_offset / 24.)
+        self.utc_offset = TimeDelta(utc_offset / 24. * u.day)
         self.telescope_id = telescope_id
         self.constraints = c.Constraints()
 

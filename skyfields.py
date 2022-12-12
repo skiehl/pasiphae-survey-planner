@@ -121,7 +121,7 @@ class Field:
         elif self.status == 2:
             status_str = 'plateauing'
         elif self.status == 3:
-            status_str = 'setting in {0}'.format(self.setting_in)
+            status_str = 'setting in {0:.2f}'.format(self.setting_in)
 
         return status_str
 

@@ -674,23 +674,36 @@ class PolyHADecLimit(Constraint):
     """
 
     #--------------------------------------------------------------------------
-    def __init__(self, polygon):
+    def __init__(self, ha, dec):
         """Create PolyHADecLimit instance.
 
         Parameters
         ----------
-        polygon : list of tuples of two floats
+        ha : list of floats
             Each list entry corresponds to one point that defines the
-            Hourangle-Declination-limit outline. Each point is a tuple of
-            two floats; the first one giving the hourangle in hours (-12, +12),
-            the second giving the declination in degrees (-90, 90).
+            Hourangle-Declination-limit outline. This list provides each
+            point's hourangles in hours (-12, +12).
+        dec : list of floats
+            Each list entry corresponds to one point that defines the
+            Hourangle-Declination-limit outline. This list provides each
+            point's declination in degrees (-90, 90).
+
+        Raises
+        ------
+        ValueError
+            Raised, if the two input lists do not have the same length.
 
         Returns
         -------
         None
         """
 
-        self.polygon = polygon
+        if len(ha) != len(dec):
+            raise ValueError("'ha' and 'dec' must be of same length.")
+
+        self.ha = list(ha)
+        self.dec = list(dec)
+        self.polygon = [(h, d) for (h, d) in zip(ha, dec)]
 
     #--------------------------------------------------------------------------
     def __str__(self):
@@ -710,7 +723,7 @@ class PolyHADecLimit(Constraint):
         for ha, dec in self.polygon:
             info = f'{info}{ha:+6.2f} {dec:+6.2f}\n'
 
-        return info
+        return info[:-1]
 
     #--------------------------------------------------------------------------
     def _orientation(self, points, q0, q1):
@@ -841,7 +854,8 @@ class PolyHADecLimit(Constraint):
         """
 
         # create array of hourangle-declination points:
-        lst = frame.obstime.sidereal_time('apparent')
+        lst = frame.obstime.sidereal_time(
+                'apparent', longitude=frame.location.lon)
         hourangle = (source_coord.ra - lst).hourangle
         hourangle = (12. + hourangle) % 24. - 12.
         dec = np.ones(hourangle.size) * source_coord.dec.deg
@@ -862,7 +876,7 @@ class PolyHADecLimit(Constraint):
             Constraint parameters.
         """
 
-        params = {'polygon': self.polygon}
+        params = {'ha': self.ha, 'dec': self.dec}
 
         return params
 
