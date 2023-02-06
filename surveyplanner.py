@@ -1034,6 +1034,47 @@ class SurveyPlanner:
     def iter_field_ids_in_circles(
             self, circle_center, radius, observatory=None, observed=None,
             pending=None, active=True):
+        """Iterate through different circle center locations and yield the IDs
+        of fields located in those circles.
+
+        Parameters
+        ----------
+        circle_center : astropy.coordinates.SkyCoord
+            Center coordinates of the circle(s). A single coordinate or
+            multiple coordinates can be provided in a SkyCoord instance.
+        radius : astropy.units.Quantity
+            The circle radius in deg or rad.
+        observatory : str, optional
+            Only count fields associated with this observatory. If None, count
+            all fields irregardless of the associated observatory.
+        observed : bool or None, optional
+            If True, only count fields that have been observed at least once.
+            If False, only count fields that have never been observed. If None,
+            count fields irregardless of whether they have been observed or
+            not. The default is None.
+        pending : bool or None, optional
+            If True, only count fields that have pending observations
+            associated. If False, only count fields that have no pending
+            observations associated. If None, count fields irregardless of
+            whether they have pending observations associated or not. The
+            default is None.
+        active : bool or None, optional
+            If True, only count active fields. If False, only count inactive
+            fields. If None, count fields active or not. The default is True.
+
+        Raises
+        ------
+        ValueError
+            Raised if a data type other than SkyCoord is provided for
+            'circle_center'..
+
+        Yields
+        ------
+        numpy.ndarray
+            Each int-dtype array lists the IDs of the fields located in the
+            circle with the corresponding center coordinates, where the fields
+            fulfill the selection criteria.
+        """
 
         # check input:
         if not isinstance(circle_center, SkyCoord):
