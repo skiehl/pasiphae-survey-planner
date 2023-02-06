@@ -1485,7 +1485,7 @@ class DBConnectorSQLite:
                             "all existing observations that have not been " \
                             "finished).")
 
-                    if userin.lower in ['y', 'yes', 'make it so!']:
+                    if userin.lower() in ['y', 'yes', 'make it so!']:
                         pass
                     elif userin == 'ALL':
                         check_existence = False
@@ -1728,7 +1728,8 @@ class DBConnectorSQLite:
                 field_ids, exposure, repetitions, filter_name):
             # build query:
             query = """\
-                SELECT observation_id, field_id, exposure, repetitions, filter
+                SELECT observation_id, field_id, exposure, repetitions, filter,
+                    done
                 FROM Observations AS o
                 LEFT JOIN Filters AS f
                 ON o.filter_id = f.filter_id
@@ -1759,12 +1760,12 @@ class DBConnectorSQLite:
                 info = "Multiple observations matching the criteria were " \
                     "found. Type 'A' to mark all as observed or select a " \
                     "specific observation ID:\n" \
-                    "Obs ID field ID      exp      rep   filter\n" \
-                    "------ -------- -------- -------- --------"
+                    "Obs ID field ID      exp      rep   filter     done\n" \
+                    "------ -------- -------- -------- -------- --------"
 
                 for i, result in enumerate(results):
                     info = f"{info}\n{i:6d} {result[1]:8d} {result[2]:8.1f} " \
-                        f"{result[3]:8d} {result[4]:>8}"
+                        f"{result[3]:8d} {result[4]:>8} {result[5]:6d}"
 
                 userin = input(f"{info}\nSelection: ")
 
@@ -1777,10 +1778,10 @@ class DBConnectorSQLite:
                     try:
                         userin = int(userin)
                         observation_ids.append(results[userin][0])
-                    except (ValueError, IndexError):
-                        raise ValueError(
-                                "Select either 'A' or one of the allowed IDs" \
-                                " (int).")
+                    except ValueError:
+                        print('No observation marked as finished.')
+                    except IndexError:
+                        raise IndexError("This is not an allowed ID." )
 
             # one observation found - save observation ID:
             elif len(results) == 1:

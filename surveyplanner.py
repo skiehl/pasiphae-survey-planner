@@ -419,127 +419,6 @@ class SurveyPlanner:
             yield field
 
     #--------------------------------------------------------------------------
-    def add_obs_windows(self, date_stop, date_start=None):
-        """Calculate observation windows for all active fields and add them to
-        the database.
-
-        Parameters
-        ----------
-        date_stop : astropy.time.Time
-            Calculate observation windows until this date. Time information is
-            truncated.
-        date_start : astropy.time.Time, optional
-            Calculate observation windows starting with this date. Time
-            information is truncated. If not set, observation windows will be
-            calculated starting with the date at which the last calculation
-            stopped. The default is None.
-
-        Returns
-        -------
-        None
-        """
-
-        print('Calculate observing windows until {0}..'.format(
-                date_stop.iso[:10]))
-
-        jd_stop = date_stop.jd
-        user_agrees = False
-
-        # connect to database:
-        db = DBConnectorSQLite(self.dbname)
-
-        # iterate through observatories:
-        for i, m, observatory in db.iter_observatories():
-            observatory_name = observatory['name']
-            print(f'Observatory {i+1} of {m} selected: {observatory_name}')
-
-            # setup observatory with constraints:
-            self._setup_observatory(observatory_name)
-
-            # iterate through fields associated with observatory:
-            for j, n, field in db.iter_fields(
-                    observatory=observatory_name, active=True):
-
-                print(f'\rField {j+1} of {n} ({j/n*100:.1f}%)..', end='')
-
-                # create Field object from tuple data:
-                field_id = field[0]
-                field_fov = field[1]
-                field_center_ra = field[2]
-                field_center_dec = field[3]
-                jd_next_obs_window = field[7]
-                field = Field(field_fov, field_center_ra, field_center_dec)
-
-                # get JD for next observing window calculation:
-                if date_start is None:
-                    now = Time.now().value
-                    date_start = Time(
-                        f'{now.year}-{now.month}-{now.day}T00:00:00')
-                    jd_start = date_start.jd
-
-                else:
-                    jd_start = date_start.jd
-
-                # no expected JD stored, use given one:
-                if jd_next_obs_window is None:
-                    pass
-
-                # given JD is earlier than expected JD, change given JD:
-                elif jd_start < jd_next_obs_window:
-                    jd_start = jd_next_obs_window
-
-                # given JD is later than expected JD, will result in gaps in
-                # data base; user consent required; warning is skipped if user
-                # already agreed; method stopped when user disagrees:
-                elif (not user_agrees and jd_start > jd_next_obs_window):
-                    date_next_obs_window = Time(
-                        jd_next_obs_window, format='jd')
-                    user_in = input(
-                        'WARNING: The current start date for calculating '
-                        'observing windows is later than the next date '
-                        f'expected {date_next_obs_window} for some fields. '
-                        'There will be gaps if continued. '
-                        'Continue for all fields? (Y) ')
-
-                    if user_in.lower() in ['y', 'yes', 'make it so!']:
-                        user_agrees = True
-                    else:
-                        print('Aborted updating of observing windows!')
-
-                        return None
-
-                # check that stop JD is after start JD:
-                if jd_stop < jd_start:
-                    print('WARNING: start date is later than stop date.',
-                          f'Field {field_id} skipped.')
-                    continue
-
-                # iterate through days:
-                for jd in np.arange(jd_start, jd_stop, 1.):
-                    # calculate observing windows:
-                    date = Time(jd, format='jd').datetime
-                    time_sunset, time_sunrise = \
-                        self.telescope.get_sun_set_rise(
-                                date.year, date.month, date.day, self.twilight)
-                    time_interval = 10. * u.min
-                    frame = self.telescope.get_frame(
-                            time_sunset, time_sunrise, time_interval)
-                    obs_windows = field.get_obs_window(
-                            self.telescope, frame, refine=1*u.min)
-
-                    # add observing windows to database:
-                    for obs_window_start, obs_window_stop in obs_windows:
-                        db.add_obs_window(
-                                field_id, obs_window_start, obs_window_stop,
-                                active=True)
-
-                # update Field information in data base:
-                db.update_next_obs_window(field_id, jd_stop)
-
-            print(f'\rField {j+1} of {n} (100%)   ')
-        print('Calculating observing windows done.')
-
-    #--------------------------------------------------------------------------
     def _set_field_status(self, field, date, days_before=3, days_after=7):
         """Determine and save a field's status (rising, plateauing, setting).
 
@@ -967,13 +846,16 @@ class SurveyPlanner:
         return fields
 
     #--------------------------------------------------------------------------
-    def get_field_by_id(self, field_id):
+    def get_field_by_id(self, field_id, db=None):
         """Get a field by its database ID.
 
         Parameters
         ----------
         field_id : int
             ID of the field as stored in the database.
+        db : db.DBConnectorSQLite, optional
+            Active database connection. If none provided a new connection is
+            established. The default is None.
 
         Raises
         ------
@@ -987,7 +869,8 @@ class SurveyPlanner:
         """
 
         # connect to database:
-        db = DBConnectorSQLite(self.dbname)
+        if db is None:
+            db = DBConnectorSQLite(self.dbname)
 
         field = db.get_field_by_id(field_id)
 
@@ -999,54 +882,168 @@ class SurveyPlanner:
         return field
 
     #--------------------------------------------------------------------------
-    def _count_neighbors(
-            self, radius, field_id, observatory=None, observed=None,
-            pending=None, active=True, return_neighbor_ids=False):
-        """Count the neighbors of a specific field given various criteria.
+    def iter_fields_by_ids(self, field_ids):
+        """Yield Field instances by their database ID.
 
         Parameters
         ----------
-        radius : astropy.units.Quantity
-            Radius in which to count field neighbors. Needs to be a Quantity
-            with unit 'rad' or 'deg'.
-        field_id : int
-            ID of the field whose neighbors are searched for.
-        observatory : str, optional
-            Only count fields associated with this observatory. If None, count
-            all fields irregardless of the associated observatory.
-        observed : bool or None, optional
-            If True, only count fields that have been observed at least once.
-            If False, only count fields that have never been observed. If None,
-            count fields irregardless of whether they have been observed or
-            not. The default is None.
-        pending : bool or None, optional
-            If True, only count fields that have pending observations
-            associated. If False, only count fields that have no pending
-            observations associated. If None, count fields irregardless of
-            whether they have pending observations associated or not. The
-            default is None.
-        active : bool or None, optional
-            If True, only count active fields. If False, only count inactive
-            fields. If None, count fields active or not. The default is True.
-        return_neighbor_ids : bool, optional
-            If True, the neighbor IDs are returnd as well. The default is
-            False.
+        field_ids : list
+            IDs of the fields as stored in the database.
+
+        Raises
+        ------
+        ValueError
+            Raise if no field with this ID exists.
+
+        Yields
+        -------
+        field : skyfields.Field
+            Field as stored in the database under specified ID.
+        """
+
+        # connect to database:
+        db = DBConnectorSQLite(self.dbname)
+
+        for field_id in field_ids:
+            field = self.get_field_by_id(field_id, db=db)
+
+            yield field
+
+    #--------------------------------------------------------------------------
+    def add_obs_windows(self, date_stop, date_start=None):
+        """Calculate observation windows for all active fields and add them to
+        the database.
+
+        Parameters
+        ----------
+        date_stop : astropy.time.Time
+            Calculate observation windows until this date. Time information is
+            truncated.
+        date_start : astropy.time.Time, optional
+            Calculate observation windows starting with this date. Time
+            information is truncated. If not set, observation windows will be
+            calculated starting with the date at which the last calculation
+            stopped. The default is None.
 
         Returns
         -------
-        count : int
-            Number of field neighbors within the specified radius that fulfill
-            the conditions.
-        neighbor_ids : np.ndarray
-            IDs of the neighbors fulfilling the conditions. Only returned if
-            'return_neighbor_ids' is True.
+        None
         """
 
-        # get coordinates of field of interest:
-        field = self.get_field_by_id(field_id)
-        field_coord = SkyCoord(field.center_ra, field.center_dec)
+        print('Calculate observing windows until {0}..'.format(
+                date_stop.iso[:10]))
 
-        # get coordinates of all fields relevant for counting:
+        jd_stop = date_stop.jd
+        user_agrees = False
+
+        # connect to database:
+        db = DBConnectorSQLite(self.dbname)
+
+        # iterate through observatories:
+        for i, m, observatory in db.iter_observatories():
+            observatory_name = observatory['name']
+            print(f'Observatory {i+1} of {m} selected: {observatory_name}')
+
+            # setup observatory with constraints:
+            self._setup_observatory(observatory_name)
+
+            # iterate through fields associated with observatory:
+            for j, n, field in db.iter_fields(
+                    observatory=observatory_name, active=True):
+
+                print(f'\rField {j+1} of {n} ({j/n*100:.1f}%)..', end='')
+
+                # create Field object from tuple data:
+                field_id = field[0]
+                field_fov = field[1]
+                field_center_ra = field[2]
+                field_center_dec = field[3]
+                jd_next_obs_window = field[7]
+                field = Field(field_fov, field_center_ra, field_center_dec)
+
+                # get JD for next observing window calculation:
+                if date_start is None:
+                    now = Time.now().value
+                    date_start = Time(
+                        f'{now.year}-{now.month}-{now.day}T00:00:00')
+                    jd_start = date_start.jd
+
+                else:
+                    jd_start = date_start.jd
+
+                # no expected JD stored, use given one:
+                if jd_next_obs_window is None:
+                    pass
+
+                # given JD is earlier than expected JD, change given JD:
+                elif jd_start < jd_next_obs_window:
+                    jd_start = jd_next_obs_window
+
+                # given JD is later than expected JD, will result in gaps in
+                # data base; user consent required; warning is skipped if user
+                # already agreed; method stopped when user disagrees:
+                elif (not user_agrees and jd_start > jd_next_obs_window):
+                    date_next_obs_window = Time(
+                        jd_next_obs_window, format='jd')
+                    user_in = input(
+                        'WARNING: The current start date for calculating '
+                        'observing windows is later than the next date '
+                        f'expected {date_next_obs_window} for some fields. '
+                        'There will be gaps if continued. '
+                        'Continue for all fields? (Y) ')
+
+                    if user_in.lower() in ['y', 'yes', 'make it so!']:
+                        user_agrees = True
+                    else:
+                        print('Aborted updating of observing windows!')
+
+                        return None
+
+                # check that stop JD is after start JD:
+                if jd_stop < jd_start:
+                    print('WARNING: start date is later than stop date.',
+                          f'Field {field_id} skipped.')
+                    continue
+
+                # iterate through days:
+                for jd in np.arange(jd_start, jd_stop, 1.):
+                    # calculate observing windows:
+                    date = Time(jd, format='jd').datetime
+                    time_sunset, time_sunrise = \
+                        self.telescope.get_sun_set_rise(
+                                date.year, date.month, date.day, self.twilight)
+                    time_interval = 10. * u.min
+                    frame = self.telescope.get_frame(
+                            time_sunset, time_sunrise, time_interval)
+                    obs_windows = field.get_obs_window(
+                            self.telescope, frame, refine=1*u.min)
+
+                    # add observing windows to database:
+                    for obs_window_start, obs_window_stop in obs_windows:
+                        db.add_obs_window(
+                                field_id, obs_window_start, obs_window_stop,
+                                active=True)
+
+                # update Field information in data base:
+                db.update_next_obs_window(field_id, jd_stop)
+
+            print(f'\rField {j+1} of {n} (100%)   ')
+        print('Calculating observing windows done.')
+
+    #--------------------------------------------------------------------------
+    def iter_field_ids_in_circles(
+            self, circle_center, radius, observatory=None, observed=None,
+            pending=None, active=True):
+
+        # check input:
+        if not isinstance(circle_center, SkyCoord):
+            raise ValueError("'circle_center' has to be SkyCoord instance.")
+
+        # convert scalar to array:
+        if not circle_center.shape:
+            circle_center = SkyCoord([circle_center.ra], [circle_center.dec])
+
+        # get coordinates of all fields meeting selection criteria:
         fields_id = []
         fields_ra = []
         fields_dec = []
@@ -1055,26 +1052,19 @@ class SurveyPlanner:
                 observatory=observatory, observed=observed, pending=pending,
                 active=active):
 
-            # skip the target field itself:
-            if field_id == field.id:
-                continue
-
             fields_id.append(field.id)
             fields_ra.append(field.center_ra)
             fields_dec.append(field.center_dec)
 
+        fields_id = np.array(fields_id)
         fields_coord = SkyCoord(fields_ra, fields_dec)
+        del fields_ra, fields_dec
 
-        # count neighbors:
-        sel = field_coord.separation(fields_coord) <= radius
-        count = np.sum(sel)
+        # iterate through circle center coordinates:
+        for coord in circle_center:
+            in_circle = fields_coord.separation(coord) <= radius
 
-        if return_neighbor_ids:
-            neighbor_ids = np.array(fields_id)[sel]
-
-            return count, neighbor_ids
-
-        return count
+            yield fields_id[in_circle]
 
     #--------------------------------------------------------------------------
     def count_neighbors(
@@ -1110,28 +1100,90 @@ class SurveyPlanner:
 
         Returns
         -------
-        neighbor_count : list of int
+        neighbor_count : numpy.ndarray or int
             Lists the number of field neighbors within the specified radius
             that fulfill the conditions for each of the input field IDs.
+            If an integer was provided for 'field_ids', an integer is returned,
+            otherwise a numpy.ndarray of integer-dtype.
         """
 
         if isinstance(field_ids, int):
-            neighbor_count = self._count_neighbors(
-                    radius, field_ids, observatory=observatory,
-                    observed=observed, pending=pending, active=active)
-
-        elif isinstance(field_ids, list):
-            neighbor_count = []
-
-            for field_id in field_ids:
-                count = self._count_neighbors(
-                        radius, field_id, observatory=observatory,
-                        observed=observed, pending=pending, active=active)
-                neighbor_count.append(count)
-
+            field_ids = [field_ids]
+            return_int = True
         else:
-            raise ValueError("'field_ids' has to be int or list.")
+            return_int = False
 
-        return neighbor_count
+        # get coordinates of fields of interest:
+        fields_ra = []
+        fields_dec = []
+
+        for field in self.iter_fields_by_ids(field_ids):
+            fields_ra.append(field.center_ra)
+            fields_dec.append(field.center_dec)
+
+        fields_coord = SkyCoord(fields_ra, fields_dec)
+        del fields_ra, fields_dec
+
+        # iterate through field coordinates and count neighbors:
+        n_neighbors = np.zeros(len(field_ids), dtype=int)
+
+        for i, neighbor_ids in enumerate(self.iter_field_ids_in_circles(
+                fields_coord, radius, observatory=observatory,
+                observed=observed, pending=pending, active=active)):
+
+            n_neighbors[i] = neighbor_ids.shape[0]
+
+            # reduce count by 1 if field is part of the list:
+            if field_ids[i] in neighbor_ids:
+                n_neighbors[i] -= 1
+
+        if return_int:
+            n_neighbors = int(n_neighbors)
+
+        return n_neighbors
+
+#==============================================================================
+
+class Prioratizer:
+    """A class to assign priorities to a list of fields.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, surveyplanner):
+        """Create Prioratizer instance.
+
+        Parameters
+        ----------
+        surveyplanner : SurveyPlanner
+            The SurveyPlanner instance this Prioratizer is used by.
+
+        Returns
+        -------
+        None.
+        """
+
+    #--------------------------------------------------------------------------
+    def _prioritize_by_sky_consistency(self, fields, observatory, radius):
+        # TODO
+
+        field_ids = [field.id for field in fields]
+
+        # count all neighboring fields for each given field:
+        count_all = self.surveyplanner.count_neighbors(
+                radius, field_ids, observatory=observatory)
+        count_all = np.array(count_all)
+
+        # count finished neighboring fields for each given field:
+        count_finished = self.surveyplanner.count_neighbors(
+                radius, field_ids, pending=False, observatory=observatory)
+        count_finished = np.array(count_finished)
+
+        # calculate fractional coverage and priority:
+        coverage = (count_finished + 1) / (count_all + 1)
+        priority = coverage / coverage.max()
+
+        return priority
+
+
 
 #==============================================================================
