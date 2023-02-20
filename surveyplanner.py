@@ -352,11 +352,12 @@ class SurveyPlanner:
         """
 
         field_id, fov, center_ra, center_dec, tilt, __, __, \
-            latest_obs_window_jd, n_obs_done, n_obs_pending = field_tuple
+                latest_obs_window_jd, n_obs_tot, n_obs_done, n_obs_pending \
+                = field_tuple
         field = Field(
             fov, center_ra, center_dec, tilt, field_id=field_id,
-            latest_obs_window_jd=latest_obs_window_jd, n_obs_done=n_obs_done,
-            n_obs_pending=n_obs_pending)
+            latest_obs_window_jd=latest_obs_window_jd, n_obs_tot=n_obs_tot,
+            n_obs_done=n_obs_done, n_obs_pending=n_obs_pending)
 
         return field
 
@@ -1185,7 +1186,7 @@ class SurveyPlanner:
 
 #==============================================================================
 
-class Prioratizer:
+class Prioritizer:
     """A class to assign priorities to a list of fields.
     """
 
@@ -1203,9 +1204,39 @@ class Prioratizer:
         None.
         """
 
+        self.surveyplanner = surveyplanner
+
     #--------------------------------------------------------------------------
-    def _prioritize_by_sky_consistency(self, fields, observatory, radius):
-        # TODO
+    def _prioritize_by_sky_coverage(
+            self, fields, radius, observatory=None, normalize=False):
+        """Assign priority based on sky coverage.
+
+        Parameters
+        ----------
+        fields : list of skyfields.Field
+            The fields that a priority is assigned to.
+        radius : astropy.units.Quantity
+            Radius in which to count field neighbors. Needs to be a Quantity
+            with unit 'rad' or 'deg'.
+        observatory : str, optional
+            Only fields associated with this observatory are taken into
+            consideration. If None, all fields are considered irregardless of
+            the associated observatory.
+        normalize : bool, optional
+            If True, all priorities are scaled such that the highest priority
+            has a value of 1.
+
+        Returns
+        -------
+        priority : numpy.ndarray
+            The priorities assigned to the input fields.
+
+        Notes
+        -----
+        The main idea is that a field that is surrounded by many finished
+        fields will get higher priority than a field with fewer finished,
+        neighboring fields.
+        """
 
         field_ids = [field.id for field in fields]
 
@@ -1219,12 +1250,112 @@ class Prioratizer:
                 radius, field_ids, pending=False, observatory=observatory)
         count_finished = np.array(count_finished)
 
-        # calculate fractional coverage and priority:
-        coverage = (count_finished + 1) / (count_all + 1)
-        priority = coverage / coverage.max()
+        # calculate fractional coverage, i.e. priority:
+        priority = (count_finished + 1) / (count_all + 1)
+
+        # normalize:
+        if normalize:
+            priority = priority / priority.max()
 
         return priority
 
+    #--------------------------------------------------------------------------
+    def _prioritize_by_field_status(
+            self, fields, rising=False, plateauing=False, setting=False):
+        # TODO: docstring
+        # rising: 1
+        # plateauing: 2
+        # setting: 3
+
+        priority = np.zeros(len(fields))
+
+        for i, field in enumerate(fields):
+            if rising and field.status == 1:
+                priority[i] = 1.
+            if plateauing and field.status == 2:
+                priority[i] = 1.
+            if setting and field.status == 3:
+                priority[i] = 1.
+
+        return priority
+
+    #--------------------------------------------------------------------------
+    def prioritize(
+            self, fields, weight_coverage=0., weight_rising=0.,
+            weight_plateauing=0., weight_setting=0., normalize=False,
+            coverage_radius=None, coverage_observatory=None,
+            coverage_normalize=False, return_all=False):
+        # TODO: docstring
+
+        # check input:
+        if weight_coverage and coverage_radius is None:
+            raise ValueError(
+                    "When 'weight_coverage' is non-zero, 'coverage_radius' " \
+                    "has to be set.")
+
+        if type(weight_coverage) not in [float, int] or \
+                weight_coverage < 0:
+            raise ValueError("'weight_coverage' must be positive float.")
+
+        if type(weight_rising) not in [float, int] or weight_rising < 0:
+            raise ValueError("'weight_rising' must be positive float.")
+
+        if type(weight_plateauing) not in [float, int] or \
+                weight_plateauing < 0:
+            raise ValueError("'weight_plateauing' must be positive float.")
+
+        # get priorities by individual criteria:
+        priorities = []
+        weights = []
+        priorities_dict = {}
+
+        if weight_coverage:
+            priority = self._prioritize_by_sky_coverage(
+                    fields, coverage_radius,
+                    observatory=coverage_observatory,
+                    normalize=coverage_normalize)
+            priorities.append(priority)
+            weights.append(weight_coverage)
+            priorities_dict['coverage'] = {
+                    'weight': weight_coverage, 'priority': priority}
+
+        if weight_rising:
+            priority = self._prioritize_by_field_status(
+                    fields, rising=True, plateauing=False, setting=False)
+            priorities.append(priority)
+            weights.append(weight_rising)
+            priorities_dict['rising'] = {
+                    'weight': weight_rising, 'priority': priority}
+
+        if weight_plateauing:
+            priority = self._prioritize_by_field_status(
+                    fields, rising=False, plateauing=True, setting=False)
+            priorities.append(priority)
+            weights.append(weight_plateauing)
+            priorities_dict['plateauing'] = {
+                    'weight': weight_plateauing, 'priority': priority}
+
+        if weight_setting:
+            priority = self._prioritize_by_field_status(
+                    fields, rising=False, plateauing=False, setting=True)
+            priorities.append(priority)
+            weights.append(weight_setting)
+            priorities_dict['setting'] = {
+                    'weight': weight_setting, 'priority': priority}
+
+        # joint priority:
+        priority = sum([w * p for w, p in zip(weights, priorities)])
+        priority /= sum(weights)
+
+        # normalize:
+        if normalize:
+            priority = priority / priority.max()
+
+        if return_all:
+            priorities_dict['joint'] = priority
+            priority = priorities_dict
+
+        return priority
 
 
 #==============================================================================
