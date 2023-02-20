@@ -1262,10 +1262,34 @@ class Prioritizer:
     #--------------------------------------------------------------------------
     def _prioritize_by_field_status(
             self, fields, rising=False, plateauing=False, setting=False):
-        # TODO: docstring
-        # rising: 1
-        # plateauing: 2
-        # setting: 3
+        """Prioratize fields by status of observability.
+
+        Parameters
+        ----------
+        fields : ist of skyfields.Field
+            The fields that a priority is assigned to.
+        rising : bool, optional
+            If True, prioritize a field if it is rising. The default is False.
+        plateauing : bool, optional
+            If True, prioritize a field if it is plateauing. The default is
+            False.
+        setting : bool, optional
+            If True, prioritize a field if it is setting. The default is False.
+
+        Returns
+        -------
+        priority : numpy.ndarray
+            The priorities assigned to the input fields.
+
+        Notes
+        -----
+        This prioritization just returns 0. or 1..
+
+        The field status IDs are the following:
+        rising: 1
+        plateauing: 2
+        setting: 3
+        """
 
         priority = np.zeros(len(fields))
 
@@ -1285,7 +1309,56 @@ class Prioritizer:
             weight_plateauing=0., weight_setting=0., normalize=False,
             coverage_radius=None, coverage_observatory=None,
             coverage_normalize=False, return_all=False):
-        # TODO: docstring
+        """Assign a priority to each field.
+
+        Parameters
+        ----------
+        fields : ist of skyfields.Field
+            The fields that a priority is assigned to.
+        weight_coverage : float or int, optional
+            Weight assigned to the sky coverage priorities. The default is 0..
+        weight_rising : float or int, optional
+            Weight assigned to the rising fields. The default is 0..
+        weight_plateauing : float or int, optional
+            Weight assigned to the plateauing fields. The default is 0..
+        weight_setting : float or int, optional
+            Weight assigned to the setting fields. The default is 0..
+        normalize : bool, optional
+            If True, the final priorities after weighting are normalized to the
+            interval [0, 1]. The default is False.
+        coverage_radius : astropy.units.Quantity
+            Radius in which to count field neighbors. Needs to be a Quantity
+            with unit 'rad' or 'deg'. Required if `weight_coverage` is given.
+        coverage_observatory : str, optional
+            Only fields associated with this observatory are taken into
+            consideration for calculation of the sky coverage. If None, all
+            fields are considered irregardless of the associated observatory.
+            Only has an effect, when `weight_coverage` is given.
+        coverage_normalize : bool, optional
+            If True, priorities are scaled such that the highest priority
+            has a value of 1.
+        return_all : bool, optional
+            If True, the priorities base on the individual criteria are
+            returned as well. Otherwise, just the final priorities are
+            returned. The default is False.
+
+        Raises
+        ------
+        ValueError
+            Raised if `weight_coverage` is given for a prioritization based on
+            the sky coverage, but `coverage_radius` is not given, which is
+            required to calculate the coverage.
+        ValueError
+            Raised if any of the weights `weight_*` is negative or not integer
+            or float.
+
+        Returns
+        -------
+        priority : numpy.ndarray of dict
+            By default, the final priorities assigned to the input fields are
+            returned as numpy.ndarray. If `return_all=True`, the final and the
+            individual priorities are returned in a dictionary.
+        """
 
         # check input:
         if weight_coverage and coverage_radius is None:
@@ -1303,6 +1376,10 @@ class Prioritizer:
         if type(weight_plateauing) not in [float, int] or \
                 weight_plateauing < 0:
             raise ValueError("'weight_plateauing' must be positive float.")
+
+        if type(weight_setting) not in [float, int] or \
+                weight_setting < 0:
+            raise ValueError("'weight_setting' must be positive float.")
 
         # get priorities by individual criteria:
         priorities = []
