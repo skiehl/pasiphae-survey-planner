@@ -305,8 +305,10 @@ class SurveyPlanner:
                 telescope['lat'], telescope['lon'], telescope['height'],
                 telescope['utc_offset'], name=telescope['name'])
 
-        # skip loading constraints:
+        # load twilight, but skip loading other constraints:
         if no_constraints:
+            constraints = db.get_constraints(observatory)
+            self.twilight = constraints['Twilight']['twilight']
             return None
 
         # read constraints:
@@ -1201,7 +1203,7 @@ class Prioritizer:
 
         Returns
         -------
-        None.
+        None
         """
 
         self.surveyplanner = surveyplanner
@@ -1235,7 +1237,14 @@ class Prioritizer:
         -----
         The main idea is that a field that is surrounded by many finished
         fields will get higher priority than a field with fewer finished,
-        neighboring fields.
+        neighboring fields. This is implemented in the variable `coverage0`.
+        However, a field with fewer neighbors (e.g. near the declination limit)
+        should get the same priority as a field with more neighbors if both
+        have no neighbors finished. This is implemented in the variable
+        `coverage1`. A weighting between two approaches is applied, such that
+        the first approach strongly applies to fields that have a strong impact
+        on finishing the neighborhood and the second approach is more dominant
+        when only we neighboring fields have been observed yet.
         """
 
         field_ids = [field.id for field in fields]
@@ -1250,8 +1259,13 @@ class Prioritizer:
                 radius, field_ids, pending=False, observatory=observatory)
         count_finished = np.array(count_finished)
 
-        # calculate fractional coverage, i.e. priority:
-        priority = (count_finished + 1) / (count_all + 1)
+        # calculate priority:
+        count_all_max = count_all.max()
+        coverage0 = (count_finished + 1) / (count_all + 1)
+        coverage1 = (count_finished + 1) / (count_all_max + 1)
+        weight0 = count_finished / count_all
+        weight1 = 1. - weight0
+        priority = coverage0 * weight0 + coverage1 * weight1
 
         # normalize:
         if normalize:
@@ -1304,11 +1318,34 @@ class Prioritizer:
         return priority
 
     #--------------------------------------------------------------------------
+    def _add_priorities_to_fields(self, priorities, fields):
+        """Add priority to each field.
+
+        Parameters
+        ----------
+        priorities : numpy.ndarray
+            The priority corresponding to each field.
+        fields : list of skyfields.Field
+            The fields that the priorities correspond to and should be added
+            to.
+
+        Returns
+        -------
+        fields : list of skyfields.Field
+            The same list of Field instances, now with priorities stored.
+        """
+
+        for priority, field in zip(priorities, fields):
+            field.set_priority(priority)
+
+        return fields
+
+    #--------------------------------------------------------------------------
     def prioritize(
             self, fields, weight_coverage=0., weight_rising=0.,
             weight_plateauing=0., weight_setting=0., normalize=False,
             coverage_radius=None, coverage_observatory=None,
-            coverage_normalize=False, return_all=False):
+            coverage_normalize=False, return_priorities=False):
         """Assign a priority to each field.
 
         Parameters
@@ -1337,10 +1374,11 @@ class Prioritizer:
         coverage_normalize : bool, optional
             If True, priorities are scaled such that the highest priority
             has a value of 1.
-        return_all : bool, optional
-            If True, the priorities base on the individual criteria are
-            returned as well. Otherwise, just the final priorities are
-            returned. The default is False.
+        return_priorities : bool, optional
+            If True, the priorities based on the individual criteria and the
+            final, joint priorities are returned as well as a dict. Otherwise,
+            just fields with priorities added are returned. The default is
+            False.
 
         Raises
         ------
@@ -1354,10 +1392,12 @@ class Prioritizer:
 
         Returns
         -------
-        priority : numpy.ndarray of dict
-            By default, the final priorities assigned to the input fields are
-            returned as numpy.ndarray. If `return_all=True`, the final and the
-            individual priorities are returned in a dictionary.
+        fields : list of skyfields.Field
+            The input fields now with priorities added.
+        optional:
+        priority : dict of numpy.ndarray
+            The priorities based on the individual criteria and the final,
+            joint priorities. Only returned if `return_all=True`.
         """
 
         # check input:
@@ -1428,9 +1468,12 @@ class Prioritizer:
         if normalize:
             priority = priority / priority.max()
 
-        if return_all:
-            priorities_dict['joint'] = priority
-            priority = priorities_dict
+
+        fields = self._add_priorities_to_fields(priority, fields)
+        priorities_dict['joint'] = priority
+
+        if return_priorities:
+            return fields, priorities_dict
 
         return priority
 
