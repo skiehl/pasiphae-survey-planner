@@ -478,6 +478,12 @@ class SurveyPlanner:
         # check status - unclear:
         elif n_windows < 4:
             pass
+            # TODO: there are two options for this happening:
+            # (1) obs windows have not been calculated long enough into the
+            # past/furture, this should be checked in the start and a warning
+            # should be raised.
+            # (2) the field is setting within four days, then better just mark
+            # it as setting - think this through, is this really the case?
 
         # check status - rising/plateauing/setting:
         else:

@@ -369,89 +369,110 @@ class FieldGridVisualizer():
 class FieldVisualizer():
     """Parent class for field visualizations.
     """
+    # TODO: docstring
 
     #--------------------------------------------------------------------------
-    def __init__(self, fields=None):
-        """Create FieldVisualizer instance.
+    def __init__(self, fields_all=None, fields_obs=None):
+    # TODO: docstring
+
+        self.fields = {'all': None, 'obs': None}
+        self.add_fields(fields_all, fields_obs)
+
+    #--------------------------------------------------------------------------
+    def _shift_ra(self, key):
+        """Shift RA to the correct quadrants for plotting.
 
         Parameters
         ----------
-        fields : list of skyfields.Field, optional
-            The fields to be drawn. If none are provided, fields need to be
-            added when calling the plotting methods. The default is None.
+        key : str
+            Key for the field RAs. Either 'all' or 'obs'.
 
         Returns
         -------
         None
         """
 
-        self.n_fields = 0
-        self.fields = []
-        self._add_fields(fields)
+        self.fields[key]['ra'] = np.where(
+                self.fields[key]['ra'] > np.pi,
+                self.fields[key]['ra'] - 2*np.pi,
+                self.fields[key]['ra'])
 
     #--------------------------------------------------------------------------
-    def _add_fields(self, fields):
-        """Add fields to class instance. Fields formerly stored will be
-        overwritten.
-
-        Raises
-        ------
-        ValueError
-            Raised when anything but a list is provided.
+    def _extract_data_fields_all(self, fields):
+        """Extract data from list of Fields with information about
+        corresponding observations.
 
         Parameters
         ----------
-        fields : list of skyfields.Field,
-            The fields to be drawn.
+        fields : list of skyfields.Field instances
+            A list of fields.
 
         Returns
         -------
         None
         """
 
-        if fields is None:
-            pass
+        key = 'all'
+        n_fields = len(fields)
 
-        elif isinstance(fields, list):
-            self.fields = fields
-            self._extract_field_data()
+        self.fields[key] = {}
+        self.fields[key]['n_fields'] = n_fields
+        self.fields[key]['ra'] = np.zeros(n_fields)
+        self.fields[key]['dec'] = np.zeros(n_fields)
+        self.fields[key]['n_obs_tot'] = np.zeros(n_fields, dtype=int)
+        self.fields[key]['n_obs_done'] = np.zeros(n_fields, dtype=int)
+        self.fields[key]['n_obs_pending'] = np.zeros(n_fields, dtype=int)
 
-        else:
-            raise ValueError(
-                    "'fields' must be a list of skyfields.Field instances.")
+        for i, field in enumerate(fields):
+            self.fields[key]['ra'][i] = field.center_ra.rad
+            self.fields[key]['dec'][i] = field.center_dec.rad
+            self.fields[key]['n_obs_tot'][i] = field.n_obs_tot
+            self.fields[key]['n_obs_done'][i] = field.n_obs_done
+            self.fields[key]['n_obs_pending'][i] = field.n_obs_pending
+
+        self._shift_ra('all')
+        self.fields[key]['obs_done'] = \
+                self.fields[key]['n_obs_tot'] == self.fields[key]['n_obs_done']
+        self.fields[key]['obs_pending'] = \
+                self.fields[key]['n_obs_pending'] > 0
 
     #--------------------------------------------------------------------------
-    def _extract_field_data(self):
-        """Extract data from list of Fields.
+    def _extract_data_fields_obs(self, fields):
+        """Extract data from list of Fields with information about the field
+        observability.
+
+        Parameters
+        ----------
+        fields : list of skyfields.Field instances
+            A list of fields.
 
         Returns
         -------
         None
         """
 
-        self.n_fields = len(self.fields)
-        self.fields_ra = np.zeros(self.n_fields)
-        self.fields_dec = np.zeros(self.n_fields)
-        self.fields_dur = np.zeros(self.n_fields)
-        self.fields_stat = np.zeros(self.n_fields, dtype=int)
-        self.fields_set_dur = []
-        self.fields_obs_done = np.zeros(self.n_fields)
-        self.fields_obs_pending = np.zeros(self.n_fields)
+        key = 'obs'
+        n_fields = len(fields)
 
-        for i, field in enumerate(self.fields):
-            self.fields_ra[i] = field.center_ra.rad
-            self.fields_dec[i] = field.center_dec.rad
-            self.fields_dur[i] = field.get_obs_duration().value
-            self.fields_stat[i] = field.status
-            if field.status == 3:
-                self.fields_set_dur.append(field.setting_in.value)
-            self.fields_obs_done[i] = field.n_obs_done
-            self.fields_obs_pending[i] = field.n_obs_pending
+        self.fields[key] = {}
+        self.fields[key]['n_fields'] = n_fields
+        self.fields[key]['ra'] = np.zeros(n_fields)
+        self.fields[key]['dec'] = np.zeros(n_fields)
+        self.fields[key]['dur_obs'] = np.zeros(n_fields)
+        self.fields[key]['status'] = np.zeros(n_fields, dtype=int)
+        self.fields[key]['dur_set'] = np.zeros(n_fields)
+        self.fields[key]['priority'] = np.zeros(n_fields)
 
-        self.fields_ra = np.where(
-                self.fields_ra > np.pi,
-                self.fields_ra - 2*np.pi,
-                self.fields_ra)
+        for i, field in enumerate(fields):
+            self.fields[key]['ra'][i] = field.center_ra.rad
+            self.fields[key]['dec'][i] = field.center_dec.rad
+            self.fields[key]['dur_obs'][i] = field.get_obs_duration().value
+            self.fields[key]['status'][i] = field.status
+            self.fields[key]['dur_set'][i] = \
+                    field.setting_in.value if field.status == 3 else -1
+            self.fields[key]['priority'][i] = field.priority
+
+        self._shift_ra('obs')
 
     #--------------------------------------------------------------------------
     def _create_figure(self, ax, cax):
@@ -497,7 +518,7 @@ class FieldVisualizer():
         return fig, ax, cax
 
     #--------------------------------------------------------------------------
-    def _add_colorbar_to_scatterplot(self, cax, sc):
+    def _add_colorbar_to_scatterplot(self, cax, sc, label):
         """Add colorbar to a scatter plot.
 
         Parameters
@@ -506,6 +527,8 @@ class FieldVisualizer():
             The subplot to draw the colorbar in.
         sc : matplotlib.collections.PathCollection
             The scatter plot.
+        label : str
+            Colorbar label.
 
         Returns
         -------
@@ -521,228 +544,152 @@ class FieldVisualizer():
             cbar = plt.colorbar(sc)
             cax = cbar.ax
 
-        return cax, cbar
-
-#==============================================================================
-
-class FieldAvailabilityVisualizer(FieldVisualizer):
-    """Visualizations of the field availability.
-    """
-
-    #--------------------------------------------------------------------------
-    def field_duration(
-            self, fields=None, night_duration=None, ax=None, cax=None,
-            **kwargs):
-        """Plot the field positions. Color code the duration of the field
-        availability. If night_duration is given, the availability is shown as
-        the fraction of the night.
-
-        Parameters
-        ----------
-        fields : list of skyfields.Field, optional
-            The fields to be drawn. If none are provided, fields must have been
-            set during instantiation. If new fields are provided, they
-            overwrite any fields stored previously. The default is None.
-        night_duration : astropy.units.Quantity, optional
-            The duration of the night in days. The default is None.
-        ax : matplotlib.axes.Axes, optional
-            The subplot to plot to. If None, a new figure is created.
-        cax : matplotlib.axes.Axes, optional
-            The subplot to draw the colorbar in. Must not be None when 'ax' is
-            not None.
-        **kwargs
-            The keyword arguments are passed to `matplotlib.pyplot.scatter()`
-
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-            The Figure instance drawn to.
-        ax : matplotlib.axes.Axes
-            The Axes instance drawn to.
-        cax : matplotlib.axes.Axes
-            The Axes instance with the colorbar.
-        cbar : matplotlib.colorbar.Colorbar
-            The colorbar.
-        """
-
-        # extract coordinates and durations from fields:
-        self._add_fields(fields)
-
-        # create figure:
-        fig, ax, cax = self._create_figure(ax, cax)
-
-        # devide duration by night duration, if applicable:
-        if night_duration is None:
-            data = self.fields_dur * 24.
-            label = 'Duration of availability (hours)'
-        else:
-            data = self.fields_dur / night_duration.value
-            label = 'Availability fraction of night'
-
-        # plot data:
-        sc = ax.scatter(
-                self.fields_ra, self.fields_dec, c=data, **kwargs)
-
-        # add colorbar:
-        cax, cbar = self._add_colorbar_to_scatterplot(cax, sc)
         cbar.ax.set_ylabel(label)
 
-        return fig, ax, cax, cbar
+        return cax, cbar
 
     #--------------------------------------------------------------------------
-    def field_set_duration(self, fields=None, ax=None, cax=None, **kwargs):
-        """Plot the positions of setting fields. Color code the duration of the
-        until when each field is setting.
+    def add_fields(self, fields_all=None, fields_obs=None):
+        """Add fields to class instance. Fields formerly stored will be
+        overwritten.
+
+        Raises
+        ------
+        ValueError
+            Raised when anything but a list is provided.
 
         Parameters
         ----------
-        fields : list of skyfields.Field, optional
-            The fields to be drawn. If none are provided, fields must have been
-            set during instantiation. If new fields are provided, they
-            overwrite any fields stored previously. The default is None.
-        ax : matplotlib.axes.Axes, optional
-            The subplot to plot to. If None, a new figure is created.
-        cax : matplotlib.axes.Axes, optional
-            The subplot to draw the colorbar in. Must not be None when 'ax' is
-            not None.
-        **kwargs
-            The keyword arguments are passed to `matplotlib.pyplot.scatter()`
+        fields : list of skyfields.Field,
+            The fields to be drawn.
 
         Returns
         -------
-        fig : matplotlib.figure.Figure
-            The Figure instance drawn to.
-        ax : matplotlib.axes.Axes
-            The Axes instance drawn to.
-        cax : matplotlib.axes.Axes
-            The Axes instance with the colorbar.
-        cbar : matplotlib.colorbar.Colorbar
-            The colorbar.
+        None
         """
 
-        # extract coordinates and setting durations from fields:
-        self._add_fields(fields)
+        if fields_all is None:
+            pass
+        elif isinstance(fields_all, list):
+            self._extract_data_fields_all(fields_all)
+        else:
+            raise ValueError(
+                    "'fields_all' must be a list of skyfields.Field instances."
+                    )
 
-        # create figure:
-        fig, ax, cax = self._create_figure(ax, cax)
-
-        # plot data:
-        sel = self.fields_stat == 3
-        sc = ax.scatter(
-                self.fields_ra[sel], self.fields_dec[sel],
-                c=self.fields_set_dur, **kwargs)
-
-        # add colorbar:
-        cax, cbar = self._add_colorbar_to_scatterplot(cax, sc)
-        cbar.ax.set_ylabel('Duration until setting (days)')
-
-        return fig, ax, cax, cbar
+        if fields_obs is None:
+            pass
+        elif isinstance(fields_obs, list):
+            self._extract_data_fields_obs(fields_obs)
+        else:
+            raise ValueError(
+                    "'fields_obs' must be a list of skyfields.Field instances."
+                    )
 
     #--------------------------------------------------------------------------
-    def field_status(
-            self, fields=None, ax=None, cax=None, cmap=None, **kwargs):
-        """Plot the field positions. Color code the status of each field.
+    def show(
+            self, show_all=True, show_finished=False, show_pending=False,
+            show_status=False, show_duration=False, show_set_duration=False,
+            show_priority=False,
+            night_duration=None, priority=None,
+            fields_all=None, fields_obs=None, cmap=None, ax=None, cax=None):
+        # TODO: docstring
 
-        Parameters
-        ----------
-        fields : list of skyfields.Field, optional
-            The fields to be drawn. If none are provided, fields must have been
-            set during instantiation. If new fields are provided, they
-            overwrite any fields stored previously. The default is None.
-        ax : matplotlib.axes.Axes, optional
-            The subplot to plot to. If None, a new figure is created.
-        cax : matplotlib.axes.Axes, optional
-            The subplot to draw the colorbar in. Must not be None when 'ax' is
-            not None.
-        cmap : matplotlib.colors.Colormap, optional
-            Colormap used for the color coding.
-        **kwargs
-            The keyword arguments are passed to `matplotlib.pyplot.scatter()`
+        # TODO: I want to separate all individual plotting parts into separate
+        # methods that will also have **kwargs for individual ploting that
+        # allows more control. This method will be a single-interface, quick-
+        # look option.
+        # TODO: Each individual plotting method should throw a warning when
+        # the required fields are not available.
 
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-            The Figure instance drawn to.
-        ax : matplotlib.axes.Axes
-            The Axes instance drawn to.
-        cax : matplotlib.axes.Axes
-            The Axes instance with the colorbar.
-        cbar : matplotlib.colorbar.Colorbar
-            The colorbar.
-        """
+        ms_fields = 12
+        ms_obs = 36
 
-        # extract coordinates and status from fields:
-        self._add_fields(fields)
-
-        # create figure:
-        fig, ax, cax = self._create_figure(ax, cax)
-
-        # create 5-color colormap:
-        if cmap is None:
-            cmap = plt.cm.rainbow
-
-        norm = colors.BoundaryNorm(np.arange(-1.5, 4, 1), cmap.N)
-
-        # plot data:
-        sc = ax.scatter(
-                self.fields_ra, self.fields_dec, c=self.fields_stat, norm=norm,
-                cmap=cmap, **kwargs)
-        cbar = plt.colorbar(sc, ticks=np.arange(-1, 4))
-        cbar.ax.set_yticklabels([
-                'undefined', 'not observable', 'rising', 'plateauing',
-                'setting'])
-
-        return fig, ax, cax, cbar
-
-#==============================================================================
-
-class FieldObservationVisualizer(FieldVisualizer):
-    """Visualizations of the field observation status.
-    """
-
-    #--------------------------------------------------------------------------
-    def field_status(
-            self, fields=None, ax=None, **kwargs):
-        """Plot the field positions. Color code the observation status.
-
-        Parameters
-        ----------
-        fields : list of skyfields.Field, optional
-            The fields to be drawn. If none are provided, fields must have been
-            set during instantiation. If new fields are provided, they
-            overwrite any fields stored previously. The default is None.
-        ax : matplotlib.axes.Axes, optional
-            The subplot to plot to. If None, a new figure is created.
-        **kwargs
-            The keyword arguments are passed to `matplotlib.pyplot.scatter()`
-
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-            The Figure instance drawn to.
-        ax : matplotlib.axes.Axes
-            The Axes instance drawn to.
-        """
-
-        # extract coordinates and status from fields:
-        self._add_fields(fields)
+        # add fields if needed:
+        self.add_fields(fields_all, fields_obs)
 
         # create figure:
         fig, ax, cax = self._create_figure(ax, None)
 
-        # plot pending fields:
-        sel = self.fields_obs_pending > 0
-        ax.scatter(
-                self.fields_ra[sel], self.fields_dec[sel],
-                edgecolor='0.4', facecolor='w', zorder=2, **kwargs)
+        # show all fields:
+        if show_all and self.fields['all']:
+            ax.scatter(
+                    self.fields['all']['ra'], self.fields['all']['dec'],
+                    marker='o', s=ms_fields, facecolor='0.7', zorder=0)
 
-        # plot observed fields:
-        sel = self.fields_obs_done > 0
-        ax.scatter(
-                self.fields_ra[sel], self.fields_dec[sel], color='k',
-                marker='s', zorder=1, **kwargs)
+        # show finished fields:
+        if show_finished and self.fields['all']:
+            sel = self.fields['all']['obs_done']
+            ax.scatter(
+                    self.fields['all']['ra'][sel],
+                    self.fields['all']['dec'][sel],
+                    marker='o', s=ms_fields, facecolor='k', zorder=2)
 
-        return fig, ax
+        # show pending fields:
+        if show_pending and self.fields['all']:
+            sel = self.fields['all']['obs_pending']
+            ax.scatter(
+                    self.fields['all']['ra'][sel],
+                    self.fields['all']['dec'][sel],
+                    marker='o', s=ms_fields, edgecolor='k', facecolor='w',
+                    zorder=2)
+
+        # show observable field status:
+        if show_status and self.fields['obs']:
+            if cmap is None:
+                cmap = plt.cm.rainbow
+
+            norm = colors.BoundaryNorm(np.arange(-0.5, 4, 1), cmap.N)
+            sc = ax.scatter(
+                    self.fields['obs']['ra'], self.fields['obs']['dec'],
+                    c=self.fields['obs']['status'], norm=norm, cmap=cmap,
+                    s=ms_obs, marker='o', zorder=1, alpha=0.8)
+            cbar = plt.colorbar(sc, ticks=np.arange(0, 4))
+            cbar.ax.set_yticklabels([
+                    'undefined', 'rising', 'plateauing', 'setting'])
+
+        # show duration of observability:
+        elif show_duration and self.fields['obs']:
+            # devide duration by night duration, if applicable:
+            if night_duration is None:
+                data = self.fields['obs']['dur_obs'] * 24.
+                label = 'Duration of availability (hours)'
+            else:
+                data = self.fields['obs']['dur_obs'] / night_duration.value
+                label = 'Availability fraction of night'
+
+            # plot data:
+            sc = ax.scatter(
+                    self.fields['obs']['ra'], self.fields['obs']['dec'],
+                    c=data, s=ms_obs)
+            cax, cbar = self._add_colorbar_to_scatterplot(cax, sc, label)
+
+        # show duration until setting:
+        elif show_set_duration and self.fields['obs']:
+           sel = self.fields['obs']['status'] == 3
+           sc = ax.scatter(
+                   self.fields['obs']['ra'][sel],
+                   self.fields['obs']['dec'][sel],
+                   c=self.fields['obs']['dur_set'][sel], s=ms_obs)
+           cax, cbar = self._add_colorbar_to_scatterplot(
+                   cax, sc, 'Duration until setting (days)')
+
+        # show priority:
+        elif show_priority and self.fields['obs']:
+            if priority is None:
+                data = self.fields['obs']['priority']
+            else:
+                data = priority
+
+            sc = ax.scatter(
+                    self.fields['obs']['ra'], self.fields['obs']['dec'],
+                    c=data, s=ms_obs)
+            cax, cbar = self._add_colorbar_to_scatterplot(
+                cax, sc, 'Priority')
+
+        return fig, ax, cax
+
+
 
 #==============================================================================
 

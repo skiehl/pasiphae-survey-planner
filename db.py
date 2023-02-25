@@ -936,7 +936,7 @@ class DBConnectorSQLite:
             query = """\
                 SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
                     f.tilt, o.name observatory, f.active,
-                    f.jd_next_obs_window, p.nobs_done,
+                    f.jd_next_obs_window, p.nobs_tot, p.nobs_done,
                     p.nobs_tot - p.nobs_done AS nobs_pending
                 FROM Fields AS f
                 LEFT JOIN Observatories AS o
@@ -1027,7 +1027,7 @@ class DBConnectorSQLite:
             query = """\
                     SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
                         f.tilt, o.name observatory, f.active,
-                        f.jd_next_obs_window, p.nobs_done,
+                        f.jd_next_obs_window, p.nobs_done, p.nobs_tot,
                         p.nobs_tot - p.nobs_done AS nobs_pending
                     FROM Fields AS f
                     LEFT JOIN Observatories AS o
