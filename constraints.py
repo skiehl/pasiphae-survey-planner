@@ -247,80 +247,6 @@ class Constraint(object, metaclass=ABCMeta):
 
 #==============================================================================
 
-class ElevationLimit(Constraint):
-    """Elevation limit: only sources above a specified elevation are
-    observable.
-    """
-
-    #--------------------------------------------------------------------------
-    def __init__(self, limit):
-        """Create ElevationLimit instance.
-
-        Parameters
-        ----------
-        limit : float
-            Lower elevation limit in degrees.
-
-        Returns
-        -------
-        None
-        """
-
-        self.limit = limit * u.deg
-
-    #--------------------------------------------------------------------------
-    def __str__(self):
-        """Description of the class instance and its parameters.
-
-        Returns
-        -------
-        str
-            Description of the class instance and its parameters.
-        """
-
-        return 'Elevation limit: {0:.2f}'.format(self.limit)
-
-    #--------------------------------------------------------------------------
-    def get(self, source_coord, frame):
-        """Evaluate the constraint for a given target, a specific location and
-        time.
-
-        Parameters
-        ----------
-        source_coord : astropy.SkyCoord
-            Coordinates of the target source.
-        frame : astropy.coordinates.builtin_frames.altaz.AltAz
-            A coordinate or frame in the Altitude-Azimuth system.
-
-        Returns
-        -------
-        out : numpy.ndarray
-            Array of boolean values. One entry for each input coordinate.
-            The entry is True, if the source is observable according to the
-            constraint, and False otherwise.
-        """
-
-        altaz = source_coord.transform_to(frame)
-        observable = altaz.alt >= self.limit
-
-        return observable
-
-    #--------------------------------------------------------------------------
-    def get_params(self):
-        """Returns the constraint parameters.
-
-        Returns
-        -------
-        dict
-            Constraint parameters.
-        """
-
-        params = {'limit': self.limit.value}
-
-        return params
-
-#==============================================================================
-
 class AirmassLimit(Constraint):
     """Airmass limit: only sources below a specified airmass are observable.
     """
@@ -403,19 +329,19 @@ class AirmassLimit(Constraint):
 
 #==============================================================================
 
-class SunDistance(Constraint):
-    """Only sources sufficiently separated from the Sun are observable.
+class ElevationLimit(Constraint):
+    """Elevation limit: only sources above a specified elevation are
+    observable.
     """
 
     #--------------------------------------------------------------------------
     def __init__(self, limit):
-        """Create SunDistance instance.
+        """Create ElevationLimit instance.
 
         Parameters
         ----------
         limit : float
-            Minimum required angular separation between targets and the Sun in
-            degrees.
+            Lower elevation limit in degrees.
 
         Returns
         -------
@@ -423,8 +349,6 @@ class SunDistance(Constraint):
         """
 
         self.limit = limit * u.deg
-        self.last_frame = None
-        self.sun_altaz = None
 
     #--------------------------------------------------------------------------
     def __str__(self):
@@ -436,7 +360,7 @@ class SunDistance(Constraint):
             Description of the class instance and its parameters.
         """
 
-        return 'Sun distance: {0:.2f}'.format(self.limit)
+        return 'Elevation limit: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
     def get(self, source_coord, frame):
@@ -458,19 +382,8 @@ class SunDistance(Constraint):
             constraint, and False otherwise.
         """
 
-        # if frame is the same as before re-use Moon positions:
-        if self._same_frame(frame):
-            sun_altaz = self.sun_altaz
-        # otherwise calculate new Moon positions:
-        else:
-            sun_altaz = get_sun(frame.obstime).transform_to(frame)
-            self.sun_altaz = sun_altaz
-            self.last_frame = frame
-
-        source_altaz = source_coord.transform_to(frame)
-        sun_altaz = get_sun(frame.obstime).transform_to(frame)
-        separation = source_altaz.separation(sun_altaz)
-        observable = separation > self.limit
+        altaz = source_coord.transform_to(frame)
+        observable = altaz.alt >= self.limit
 
         return observable
 
@@ -485,6 +398,103 @@ class SunDistance(Constraint):
         """
 
         params = {'limit': self.limit.value}
+
+        return params
+
+
+#==============================================================================
+
+class HourangleLimit(Constraint):
+    """Hourangle limit: only sources within a specific hourangle limit are
+    observable.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, limit, limit_lo=None):
+        """Create HourangleLimit instance.
+
+        Parameters
+        ----------
+        limit : float
+            Hourangle limit in hourangles.
+        limit_lo : float, optional
+            Lower hourangle limit in hourangles. Provide if the absolute value
+            ofvthe lower limit differs from the upper limit. If not povided,
+            the negative value of the limit provided in the first argument is
+            automatically used as lower limit. The default is None.
+
+        Returns
+        -------
+        None
+        """
+
+        self.limit_hi = limit * u.hourangle
+        self.limit_lo = -limit if limit_lo is None else limit_lo
+        self.limit_lo *= u.hourangle
+
+    #--------------------------------------------------------------------------
+    def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        info : str
+            Description of the class instance and its parameters.
+        """
+
+        if self.Limit_hi == self.limit_lo:
+            info = 'Hourangle limit: +/-{0:.2f}'.format(self.limit_hi)
+        else:
+            info = 'Hourangle limit:\n'
+            info += 'Lower limit: {0:.2f}\n'.format(self.limit_lo)
+            info += 'Upper limit: {0:.2f}'.format(self.limit_hi)
+
+        return info
+
+    #--------------------------------------------------------------------------
+    def get(self, source_coord, frame):
+        """Evaluate the constraint for a given target, a specific location and
+        time.
+
+        Parameters
+        ----------
+        source_coord : astropy.SkyCoord
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
+
+        Returns
+        -------
+        out : numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to the
+            constraint, and False otherwise.
+        """
+
+        # get hourangles:
+        lst = frame.obstime.sidereal_time(
+                'apparent', longitude=frame.location.lon)
+        hourangle = (source_coord.ra - lst).hourangle
+        hourangle = (12. + hourangle) % 24. - 12.
+        hourangle = hourangle * u.hourangle
+
+        observable = np.logical_and(
+                hourangle >= self.limit_lo, hourangle <= self.limit_hi)
+
+        return observable
+
+    #--------------------------------------------------------------------------
+    def get_params(self):
+        """Returns the constraint parameters.
+
+        Returns
+        -------
+        dict
+            Constraint parameters.
+        """
+
+        params = {
+                'limit': self.limit_hi.value, 'limit_lo': self.limit_lo.value}
 
         return params
 
@@ -882,3 +892,89 @@ class PolyHADecLimit(Constraint):
 
 #==============================================================================
 
+class SunDistance(Constraint):
+    """Only sources sufficiently separated from the Sun are observable.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, limit):
+        """Create SunDistance instance.
+
+        Parameters
+        ----------
+        limit : float
+            Minimum required angular separation between targets and the Sun in
+            degrees.
+
+        Returns
+        -------
+        None
+        """
+
+        self.limit = limit * u.deg
+        self.last_frame = None
+        self.sun_altaz = None
+
+    #--------------------------------------------------------------------------
+    def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        str
+            Description of the class instance and its parameters.
+        """
+
+        return 'Sun distance: {0:.2f}'.format(self.limit)
+
+    #--------------------------------------------------------------------------
+    def get(self, source_coord, frame):
+        """Evaluate the constraint for a given target, a specific location and
+        time.
+
+        Parameters
+        ----------
+        source_coord : astropy.SkyCoord
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
+
+        Returns
+        -------
+        out : numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to the
+            constraint, and False otherwise.
+        """
+
+        # if frame is the same as before re-use Moon positions:
+        if self._same_frame(frame):
+            sun_altaz = self.sun_altaz
+        # otherwise calculate new Moon positions:
+        else:
+            sun_altaz = get_sun(frame.obstime).transform_to(frame)
+            self.sun_altaz = sun_altaz
+            self.last_frame = frame
+
+        source_altaz = source_coord.transform_to(frame)
+        sun_altaz = get_sun(frame.obstime).transform_to(frame)
+        separation = source_altaz.separation(sun_altaz)
+        observable = separation > self.limit
+
+        return observable
+
+    #--------------------------------------------------------------------------
+    def get_params(self):
+        """Returns the constraint parameters.
+
+        Returns
+        -------
+        dict
+            Constraint parameters.
+        """
+
+        params = {'limit': self.limit.value}
+
+        return params
+
+#==============================================================================

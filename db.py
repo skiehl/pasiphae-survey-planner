@@ -710,11 +710,13 @@ class DBConnectorSQLite:
                 INSERT INTO Constraints (constraint_name)
                 VALUES
                     ('Twilight'),
-                    ('ElevationLimit'),
                     ('AirmassLimit'),
+                    ('ElevationLimit'),
+                    ('HourangleLimit'),
                     ('MoonDistance'),
                     ('MoonPolarization'),
-                    ('PolyHADecLimit')
+                    ('PolyHADecLimit'),
+                    ('SunDistance')
                 """
             self._query(connection, query, commit=True)
             print("Constraints added to table 'Constraints'.")
