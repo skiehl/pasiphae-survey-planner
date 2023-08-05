@@ -5,9 +5,12 @@
 
 from astropy.time import Time
 from astropy import units as u
+from math import ceil
 import os
 import sqlite3
 import warnings
+
+from fieldgrid import FieldGrid
 
 __author__ = "Sebastian Kiehlmann"
 __credits__ = ["Sebastian Kiehlmann"]
@@ -528,7 +531,8 @@ class DBConnectorSQLite:
 
         Returns
         -------
-        None
+        bool
+            True, if a new database was created, False otherwise.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -565,8 +569,10 @@ class DBConnectorSQLite:
         # create file:
         if create:
             os.system(f'sqlite3 {self.db_file}')
-
-        print(f"Database '{self.db_file}' created.")
+            print(f"Database '{self.db_file}' created.")
+        else:
+            print(f"Existing database '{self.db_file}' kept.")
+            return False
 
         # create tables:
         with SQLiteConnection(self.db_file) as connection:
@@ -713,6 +719,8 @@ class DBConnectorSQLite:
             self._query(connection, query, commit=True)
             print("Constraints added to table 'Constraints'.")
 
+        return True
+
     #--------------------------------------------------------------------------
     def add_observatory(self, name, lat, lon, height, utc_offset):
         """Add observatory to database.
@@ -822,57 +830,70 @@ class DBConnectorSQLite:
             yield i, n, telescope
 
     #--------------------------------------------------------------------------
-    def add_fields(self, fields, observatory, active=True):
+    def add_fields(self, fields, observatory, active=True, n_batch=1000):
         """Add fields to the database.
 
         Parameters
         ----------
-        fields : skyfields.Fields
+        fields : fieldgrid.FieldGrid
             The fields to add.
         observatory : str
             Name of the observatory associated with the fields.
         active : bool, optional
             If True, fields are added as active, and as inactive otherwise. The
             default is True.
+        n_batch : int, optinal
+            Add fields in batches of this size to the data base. The default is
+            1000.
+
+        Raises
+        ------
+        ValueError
+            Raised, if 'fields' is not FieldGrid instance.
+            Raised, if 'n_batch' is not integer > 0.
 
         Returns
         -------
         None
-
-        Notes
-        -----
-        Adding multiple fields at a time might be faster. However, finding the
-        optimal number requires test and we do not add fields regularly.
-        Therefore, a simple insertion loop is used.
         """
 
+        # check input:
+        if not isinstance(fields, FieldGrid):
+            raise ValueError("'fields' must be FieldGrid instance.")
+        if not isinstance(n_batch, int) or n_batch < 1:
+            raise ValueError("'n_batch' must be integer > 0.")
+
+        center_ras, center_decs = fields.get_center_coords()
+        fov = fields.fov
+        tilt = fields.tilt
         observatory_id = self._get_observatory_id(observatory)
         active = bool(active)
         n_fields = len(fields)
+        n_iter = ceil(n_fields / n_batch)
 
         with SQLiteConnection(self.db_file) as connection:
-
-            # iterate through fields:
-            for i, field in enumerate(fields.fields):
+            # iterate through batches:
+            for i in range(n_iter):
+                j = i * n_batch
+                k = (i + 1) * n_batch
                 print(
-                    f'\rAdding field {i} of {n_fields} ' \
-                    f'({i*100./n_fields:.1f}%)..',
+                    '\rAdding fields {0}-{1} of {2} ({3:.1f}%)..'.format(
+                            j, k-1 if k <= n_fields else n_fields, n_fields,
+                            i*100./n_iter),
                     end='')
 
-                fov = field.fov.rad
-                center_ra = field.center_coord.ra.rad
-                center_dec = field.center_coord.dec.rad
-                tilt = field.tilt.rad
+                data = [(fov, center_ra, center_dec, tilt, observatory_id,
+                         active) \
+                        for center_ra, center_dec \
+                        in zip(center_ras[j:k], center_decs[j:k])]
 
                 query = """\
                     INSERT INTO Fields (
                         fov, center_ra, center_dec, tilt, observatory_id,
                         active)
-                    VALUES ('{0}', {1}, {2}, {3}, {4}, {5});
-                    """.format(
-                        fov, center_ra, center_dec, tilt,
-                        observatory_id, active)
-                self._query(connection, query, commit=True)
+                    VALUES (?, ?, ?, ?, ?, ?);
+                    """
+                self._query(connection, query, many=data, commit=True)
 
             print(f'\r{n_fields} fields added to database.                   ')
 

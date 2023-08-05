@@ -3,13 +3,15 @@
 """Visualizations for the Pasiphae survey planner.
 """
 
+from astropy.coordinates import SkyCoord
 import cartopy.crs as ccrs
 from matplotlib import colors
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 import numpy as np
+import warnings
 
-from skyfields import SkyFields
+from fieldgrid import FieldGrid
 
 __author__ = "Sebastian Kiehlmann"
 __credits__ = ["Sebastian Kiehlmann"]
@@ -29,47 +31,47 @@ class FieldGridVisualizer():
     """
 
     #--------------------------------------------------------------------------
-    def __init__(self, fields_n=None, fields_s=None):
+    def __init__(self, *grids):
         """Create FieldGridVisualizer instance.
 
         Parameters
         ----------
-        fields_n : skyfields.SkyFields or list of skyfields.Field, optional
+        grids : skyfields.FieldGrid or list of skyfields.Field
             The fields to be drawn. If a list is provided it must contain
-            skyfields.Field instances. If no fields are provided at class
-            instantiation, they must be provided when calling the plotting
-            method. The default is None.
-        fields_s : skyfields.SkyFields or list of skyfields.Field, optional
-            Fields to be drawn in a differnet color. If a list is provided it
-            must contain skyfields.Field instances. The default is None.
+            skyfields.Field instances. Multiple grids can be provided that will
+            be plotted in different colors. If no fields are provided at class
+            instanciation, they must be provided when calling the plotting
+            method.
 
         Returns
         -------
         None
         """
 
-        self.fields_n = []
-        self.fields_n = []
-        self._add_fields(fields_n, fields_s)
+        self.grids = []
+        self._add_grids(*grids)
 
     #--------------------------------------------------------------------------
-    def _add_fields(self, fields_n, fields_s):
-        """Add fields to class instance. Fields formerly stored will be
+    def _extract_coords_from_list(self, fields):
+        # TODO: docstring
+
+        raise NotImplementedError()
+
+    #--------------------------------------------------------------------------
+    def _add_grids(self, *grids):
+        """Add field grid(s) to class instance. Fields formerly stored will be
         overwritten.
 
         Parameters
         ----------
-        fields_n : skyfields.SkyFields or list of skyfields.Field,
+        grids : skyfields.FieldGrid or list of skyfields.Field
             The fields to be drawn. If a list is provided it must contain
             skyfields.Field instances.
-        fields_s : skyfields.SkyFields or list of skyfields.Field or None
-            Fields to be drawn in a differnet color. If a list is provided it
-            must contain skyfields.Field instances. The default is None.
 
         Raises
         ------
         ValueError
-            Raised when anything but skyfields.SkyFields, list, or None is
+            Raised when anything but skyfields.FieldGrid, list, or None is
             provided to either of the arguments.
 
         Returns
@@ -77,27 +79,25 @@ class FieldGridVisualizer():
         None
         """
 
-        if fields_n is None:
-           pass
-        elif isinstance(fields_n, SkyFields):
-            self.fields_n = fields_n.get_fields()
-        elif isinstance(fields_n, list):
-            self.fields_n = fields_n
-        else:
-            raise ValueError(
-                    "Either provide SkyFields instance or list of Fields.")
+        self.grids = []
 
-        if fields_n is not None and fields_s is None:
-            self.fields_s = []
-        elif fields_s is None:
-            pass
-        elif isinstance(fields_s, SkyFields):
-            self.fields_s = fields_s.get_fields()
-        elif isinstance(fields_s, list):
-            self.fields_s = fields_s
-        else:
-            raise ValueError(
-                    "Either provide SkyFields instance or list of Fields.")
+        for grid in grids:
+            self.grids.append({})
+
+            if isinstance(grid, FieldGrid):
+                self.grids[-1]['center_ras'], self.grids[-1]['center_decs'] \
+                        = grid.get_center_coords()
+                self.grids[-1]['corner_ras'], self.grids[-1]['corner_decs'] \
+                        = grid.get_corner_coords()
+
+            elif isinstance(grid, list):
+                self.grids[-1]['center_ras'], self.grids[-1]['center_decs'], \
+                self.grids[-1]['corner_ras'], self.grids[-1]['corner_decs'] \
+                        = self._extract_coords_from_list(grid)
+
+            else:
+                raise ValueError(
+                        "Either provide FieldGrid instance or list of Fields.")
 
     #--------------------------------------------------------------------------
     def _create_orthographic_figure(
@@ -169,13 +169,15 @@ class FieldGridVisualizer():
         return fig, ax
 
     #--------------------------------------------------------------------------
-    def _plot_field_orthogonal(self, field, ax, color):
+    def _plot_field_orthographic(self, corner_ras, corner_decs, ax, color):
         """Draw a single field to the orthogonal projection plot.
 
         Parameters
         ----------
-        field : skyfields.Field
-            The Field instance to draw.
+        corner_ras : np.ndarray
+            Right ascensions of the four field corner points in radians
+        corner_decs : np.ndarray
+            Declinations of the four field corner points in radians..
         ax : matplotlib.axes.Axes
             The Axes instance to draw to.
         color : color
@@ -187,23 +189,30 @@ class FieldGridVisualizer():
         """
 
         # extract corner coordinates:
-        corners_ra = field.corners_coord.ra.deg
-        corners_ra = np.r_[corners_ra, corners_ra[0]]
-        corners_dec = field.corners_coord.dec.deg
-        corners_dec = np.r_[corners_dec, corners_dec[0]]
+        corner_ras = corner_ras / np.pi * 180. # deg
+        corner_ras = np.r_[corner_ras, corner_ras[0]]
+        corner_decs = corner_decs / np.pi * 180. # deg
+        corner_decs = np.r_[corner_decs, corner_decs[0]]
+
+
+        if np.any(np.diff(corner_ras) > 180.):
+            corner_ras = np.where(
+                    corner_ras > 180., corner_ras - 360., corner_ras)
 
         # plot outline:
-        ax.plot(corners_ra, corners_dec, color=color, linestyle='-',
+        ax.plot(corner_ras, corner_decs, color=color, linestyle='-',
                 linewidth=0.5, transform=ccrs.PlateCarree())
 
     #--------------------------------------------------------------------------
-    def _plot_field_mollweide(self, field, ax, color):
+    def _plot_field_mollweide(self, corner_ras, corner_decs, ax, color):
         """Draw a single field to the Mollweide projection plot.
 
         Parameters
         ----------
-        field : skyfields.Field
-            The Field instance to draw.
+        corner_ras : np.ndarray
+            Right ascensions of the four field corner points in radians
+        corner_decs : np.ndarray
+            Declinations of the four field corner points in radians..
         ax : matplotlib.axes.Axes
             The Axes instance to draw to.
         color : color
@@ -215,57 +224,131 @@ class FieldGridVisualizer():
         """
 
         # extract corner coordinates:
-        corners_ra = field.corners_coord.ra.rad
-        corners_ra = np.r_[corners_ra, corners_ra[0]]
-        corners_ra = np.where(
-                corners_ra > np.pi, corners_ra - 2*np.pi, corners_ra)
-        corners_dec = field.corners_coord.dec.rad
-        corners_dec = np.r_[corners_dec, corners_dec[0]]
+        corner_ras = np.r_[corner_ras, corner_ras[0]]
+        corner_ras = np.where(
+                corner_ras > np.pi, corner_ras - 2 * np.pi, corner_ras)
+        corner_decs = np.r_[corner_decs, corner_decs[0]]
 
         # plot wrapping fields:
-        if corners_ra[0] > 0 and corners_ra[1] < 0:
+        if corner_ras[0] > 0 and corner_ras[1] < 0:
             # plot right part:
-            ax.plot([np.pi, corners_ra[0], corners_ra[0], np.pi],
-                    [corners_dec[2], corners_dec[2], corners_dec[0],
-                     corners_dec[0]],
+            ax.plot([np.pi, corner_ras[0], corner_ras[0], np.pi],
+                    [corner_decs[2], corner_decs[2], corner_decs[0],
+                     corner_decs[0]],
                     color=color, linestyle='-', linewidth=0.5)
 
             # plot left part:
-            ax.plot([-np.pi, corners_ra[1], corners_ra[1], -np.pi],
-                    [corners_dec[2], corners_dec[2], corners_dec[0],
-                     corners_dec[0]],
+            ax.plot([-np.pi, corner_ras[1], corner_ras[1], -np.pi],
+                    [corner_decs[2], corner_decs[2], corner_decs[0],
+                     corner_decs[0]],
                     color=color, linestyle='-', linewidth=0.5)
-
 
         # plot non-wrapping fields:
         else:
-            ax.plot(corners_ra, corners_dec, color=color, linestyle='-',
+            ax.plot(corner_ras, corner_decs, color=color, linestyle='-',
                     linewidth=0.5)
 
     #--------------------------------------------------------------------------
+    def _plot_galactic_plane_orthographic(self, ax, gal_lat_lim, n=100):
+        """Plot the galactic plane latitude limits.
+
+        Parameters
+        ----------
+        matplotlib.axes.Axes
+           The Axes instance to draw to.
+        gal_lat_lim : float
+            Galactic latitude limit in radians. Will only be plotted if
+            different from zero.
+        n : int, optional
+            Number of points used for the plotted lines. The default is 100.
+
+        Returns
+        -------
+        None
+        """
+
+        if not gal_lat_lim:
+            return None
+
+        gal_lat_lim *= 180. / np.pi
+        l = np.linspace(0, 360., n)
+
+        for sign in [-1, 1]:
+            b = gal_lat_lim * sign * np.ones(l.shape[0])
+            gcoord = SkyCoord(l=l, b=b, unit='deg', frame='galactic')
+            coord = gcoord.fk5
+            ax.plot(coord.ra.deg, coord.dec.deg, marker='None', color='orange',
+                    linestyle='-', transform=ccrs.PlateCarree())
+
+    #--------------------------------------------------------------------------
+    def _plot_galactic_plane_mollweide(self, ax, gal_lat_lim, n=100):
+        """Plot the galactic plane latitude limits.
+
+        Parameters
+        ----------
+        matplotlib.axes.Axes
+           The Axes instance to draw to.
+        gal_lat_lim : float
+            Galactic latitude limit in radians. Will only be plotted if
+            different from zero.
+        n : int, optional
+            Number of points used for the plotted lines. The default is 100.
+
+        Returns
+        -------
+        None
+        """
+
+        if not gal_lat_lim:
+            return None
+
+        gal_lat_lim *= 180. / np.pi
+        l = np.linspace(0, 360., n+1)
+        l = np.r_[l, l[1]]
+
+        for sign in [-1, 1]:
+            b = sign * gal_lat_lim * np.ones(l.shape[0])
+            gcoord = SkyCoord(l=l, b=b, unit='deg', frame='galactic')
+            coord = gcoord.fk5
+            ra = np.where(
+                    coord.ra.rad > np.pi, coord.ra.rad - 2. * np.pi,
+                    coord.ra.rad)
+            dec = coord.dec.rad
+
+            i_wrap = np.nonzero(np.absolute(np.diff(ra)) > np.pi)[0]
+            i_wrap = [0] + list(i_wrap + 1) + [-1]
+
+            for i, j in zip(i_wrap[:-1], i_wrap[1:]):
+                ax.plot(ra[i:j], dec[i:j], marker='None', color='orange',
+                        linestyle='-')
+
+    #--------------------------------------------------------------------------
     def orthographic(
-            self, central_longitude=0., central_latitude=0., fields_n=None,
-            fields_s=None, ax=None):
+            self, *grids, gal_lat_lim=0, central_longitude=25.,
+            central_latitude=45., outlines=False, ax=None, **kwargs):
+        # TODO: docstring
         """Orthographic plot of fields.
 
         Parameters
         ----------
+        grids : skyfields.FieldGrid or list of skyfields.Field
+            The fields to be drawn. If a list is provided it must contain
+            skyfields.Field instances. Multiple grids can be provided that will
+            be plotted in different colors. If fields were provided at class
+            instanciation, they do not have to be provided here. If provided
+            here, these fields will overwrite any fields added before.
+        gal_lat_lim : float, optional
+            Galactic latitude limit in radians. Will only be plotted if
+            different from zero. The default is 0.
         central_longitude : float
             Longitude in deg that is in the center of the projection. The
-            default is 0..
+            default is 25..
         central_latitude : float
             Latitude in deg that is in the center of the projection. The
-            default is 0..
-        fields_n : skyfields.SkyFields or list of skyfields.Field, optional
-            The fields to be drawn. If a list is provided it must contain
-            skyfields.Field instances. If no fields are provided the ones added
-            at instantiation are drawn. Fields provided here will overwrite
-            any fields added previously. The default is None.
-        fields_s : skyfields.SkyFields or list of skyfields.Field, optional
-            Fields to be drawn in a differnet color. If a list is provided it
-            must contain skyfields.Field instances. If no fields are provided
-            the ones added at instantiation are drawn. Fields provided here
-            will overwrite any fields added previously. The default is None.
+            default is 45..
+        outlines : bool, optional
+            If True, plot field outlines. Otherwise only field centers are
+            plotted. The default is False.
         ax : matplotlib.axes.Axes, optional
             The Axes instance to draw to. If no Axes is provided a new figure
             and axes instance are created. The default is None.
@@ -283,47 +366,60 @@ class FieldGridVisualizer():
             The Axes instance drawn to.
         """
 
-        # add fields:
-        self._add_fields(fields_n, fields_s)
-
-        # raise error, when no (northern) fields are provided:
-        if not len(self.fields_n):
-            raise ValueError(
-                    "No fields provided. Either provide during instance " \
-                    "creation or through plotting method.")
+        # add grids:
+        if len(grids):
+            self._add_grids(*grids)
 
         # create figure:
         fig, ax = self._create_orthographic_figure(
                 ax, central_longitude, central_latitude)
 
-        # plot (northern) fields:
-        for field in self.fields_n:
-            self._plot_field_orthogonal(field, ax, 'k')
+        # plot Galactic plane:
+        self._plot_galactic_plane_orthographic(ax, gal_lat_lim)
 
-        # plot southern fields:
-        if len(self.fields_s):
-            for field in self.fields_s:
-                self._plot_field_orthogonal(field, ax, 'b')
+        # warn when no grids are provided:
+        if not len(self.grids):
+            warnings.warn(
+                    "No field grids provided. Either provide during instance" \
+                    " creation or through plotting method.")
+
+            return fig, ax
+
+        # iterate through grids:
+        for grid in self.grids:
+            # plot field outlines:
+            if outlines:
+                for corner_ras, corner_decs in zip(
+                        grid['corner_ras'], grid['corner_decs']):
+                    self._plot_field_orthographic(
+                            corner_ras, corner_decs, ax, 'k')
+
+            # or plot field centers:
+            else:
+                ax.plot(np.degrees(grid['center_ras']),
+                        np.degrees(grid['center_decs']), linestyle='None',
+                        marker='o', transform=ccrs.PlateCarree(), **kwargs)
 
         return fig, ax
 
     #--------------------------------------------------------------------------
-    def mollweide(self, fields_n=None, fields_s=None, ax=None):
+    def mollweide(self, *grids, gal_lat_lim=0, outlines=False, ax=None, **kwargs):
         """Mollweide plot of fields.
 
         Parameters
         ----------
-        fields_n : skyfields.SkyFields or list of skyfields.Field, optional
+        grids : skyfields.FieldGrid or list of skyfields.Field
             The fields to be drawn. If a list is provided it must contain
-            skyfields.Field instances. If no fields are provided the ones added
-            at instantiation are drawn. Fields provided here will overwrite
-            any fields added previously. The default is None.
-        fields_s : skyfields.SkyFields or list of skyfields.Field, optional
-            Fields to be drawn in a differnet color. If a list is provided it
-            must contain skyfields.Field instances. If no fields are provided
-            the ones added at instantiation are drawn. Fields provided here
-            will overwrite any fields added previously. The default is None.
-        ax : matplotlib.axes.Axes, optional
+            skyfields.Field instances. Multiple grids can be provided that will
+            be plotted in different colors. If fields were provided at class
+            instanciation, they do not have to be provided here. If provided
+            here, these fields will overwrite any fields added before.
+        gal_lat_lim : float, optional
+            Galactic latitude limit in radians. Will only be plotted if
+            different from zero. The default is 0.
+        outlines : bool, optional
+            If True, plot field outlines. Otherwise only field centers are
+            plotted. The default is False.
         ax : matplotlib.axes.Axes, optional
             The Axes instance to draw to. If no Axes is provided a new figure
             and axes instance are created. The default is None.
@@ -341,26 +437,41 @@ class FieldGridVisualizer():
             The Axes instance drawn to.
         """
 
-        # add fields:
-        self._add_fields(fields_n, fields_s)
-
-        # raise error, when no (northern) fields are provided:
-        if not len(self.fields_n):
-            raise ValueError(
-                    "No fields provided. Either provide during instance " \
-                    "creation or through plotting method.")
+        # add grids:
+        if len(grids):
+            self._add_grids(*grids)
 
         # create figure:
         fig, ax = self._create_mollweide_figure(ax)
 
-        # plot (northern) fields:
-        for field in self.fields_n:
-            self._plot_field_mollweide(field, ax, 'k')
+        # plot Galactic plane:
+        self._plot_galactic_plane_mollweide(ax, gal_lat_lim)
 
-        # plot southern fields:
-        if len(self.fields_s):
-            for field in self.fields_s:
-                self._plot_field_mollweide(field, ax, 'b')
+        # warn when no grids are provided:
+        if not len(self.grids):
+            warnings.warn(
+                    "No field grids provided. Either provide during instance" \
+                    " creation or through plotting method.")
+
+            return fig, ax
+
+        # iterate through grids:
+        for grid in self.grids:
+            # plot field outlines:
+            if outlines:
+                for corner_ras, corner_decs in zip(
+                        grid['corner_ras'], grid['corner_decs']):
+                    self._plot_field_mollweide(
+                            corner_ras, corner_decs, ax, 'k')
+
+            # or plot field centers:
+            else:
+                center_ras = np.where(
+                        grid['center_ras'] > np.pi,
+                        grid['center_ras'] - 2. * np.pi,
+                        grid['center_ras'])
+                ax.plot(center_ras, grid['center_decs'],
+                        linestyle='None', marker='o', **kwargs)
 
         return fig, ax
 

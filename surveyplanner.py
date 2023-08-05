@@ -13,7 +13,6 @@ from warnings import warn
 
 import constraints as c
 from db import DBConnectorSQLite
-from skyfields import Field
 
 __author__ = "Sebastian Kiehlmann"
 __credits__ = ["Sebastian Kiehlmann"]
@@ -26,6 +25,318 @@ __status__ = "Production"
 
 #==============================================================================
 # CLASSES
+#==============================================================================
+
+class Field:
+    """A field in the sky."""
+
+    #--------------------------------------------------------------------------
+    def __init__(
+            self, fov, center_ra, center_dec, tilt=0., field_id=None,
+            latest_obs_window_jd=None, n_obs_tot=0, n_obs_done=0,
+            n_obs_pending=0):
+        """A field in the sky.
+
+        Parameters
+        ----------
+        fov : float
+            Field of view in radians. Diameter East to West and North to South.
+        center_ra : float
+            Right ascension of the field center in radians.
+        center_dec : float
+            Declination of the field center in radians.
+        tilt : float, optional
+            Tilt of the field such that the top and bottom borders are not
+            parallel to the horizon. The default is 0..
+        field_id : int, optional
+            ID of the field. The default is None.
+        latest_obs_window_jd : float, optional
+            The latest Julian date for which an observing window was calculated
+            for this field. The default is None.
+        n_obs_tot : int, optional
+            The number of observations associated with this field, irregardless
+            of being pending or finished. The default is 0.
+        n_obs_done : int, optional
+            The number of observations finished for this field. The default is
+            0.
+        n_obs_pending : int, optional
+            The number of observations pending for this field. The default is
+            0.
+
+        Returns
+        -------
+        None.
+        """
+
+        self.id = field_id
+        self.fov = Angle(fov, unit='rad')
+        self.center_coord = SkyCoord(center_ra, center_dec, unit='rad')
+        self.center_ra = self.center_coord.ra
+        self.center_dec = self.center_coord.dec
+        self.tilt = Angle(tilt, unit='rad')
+        self.latest_obs_window_jd = latest_obs_window_jd
+        self.obs_windows = []
+        self.status = 0
+        self.setting_in = -1
+        self.n_obs_tot = n_obs_tot
+        self.n_obs_done = n_obs_done
+        self.n_obs_pending = n_obs_pending
+        self.priority = -1
+
+    #--------------------------------------------------------------------------
+    def __str__(self):
+        """Return information about the field instance.
+
+        Returns
+        -------
+        info : str
+            Description of main field properties.
+        """
+
+        info = dedent("""\
+            Sky field {0:s}
+            Field of view: {1:8.4f} arcmin
+            Center RA:     {2:8.4f} deg
+            Center Dec:    {3:+8.4f} deg
+            Tilt:          {4:+8.4f} deg
+            Status:        {5}
+            Observations:  {6} total
+                           {7} pending
+                           {8} done
+            """.format(
+                f'{self.id}' if self.id is not None else '',
+                self.fov.arcmin, self.center_ra.deg, self.center_dec.deg,
+                self.tilt.deg, self._status_to_str(), self.n_obs_tot,
+                self.n_obs_pending, self.n_obs_done))
+
+        return info
+
+    #--------------------------------------------------------------------------
+    def _status_to_str(self):
+        """Convert the field status ID to readable information.
+
+        Returns
+        -------
+        status_str : str
+            Description of the field status.
+        """
+
+        if self.status == -1:
+            status_str = 'not observable'
+        elif self.status == 0:
+            status_str = 'unknown/undefined'
+        elif self.status == 1:
+            status_str = 'rising'
+        elif self.status == 2:
+            status_str = 'plateauing'
+        elif self.status == 3:
+            status_str = 'setting in {0:.2f}'.format(self.setting_in)
+
+        return status_str
+
+    #--------------------------------------------------------------------------
+    def _true_blocks(self, observable):
+        """Find blocks of successive True's.
+
+        Parameters
+        ----------
+        observable : nump.ndarray
+            Boolean-type 1dim-array.
+
+        Returns
+        -------
+        list
+            Each element corresponds to one block of True's. The element is a
+            list of two integers, the first marking the first index of the
+            block, the second marking the last True entry of the block.
+        """
+
+        i = 0
+        periods = []
+
+        # iterate through array:
+        while i < observable.size-1:
+            if ~np.any(observable[i:]):
+                break
+            j = np.argmax(observable[i:]) + i
+            k = np.argmax(~observable[j:]) + j
+            if j == k and j != observable.size-1:
+                k = observable.size
+            periods.append((j,k-1))
+            i = k
+
+        return periods
+
+    #--------------------------------------------------------------------------
+    def get_obs_window(self, telescope, frame, refine=0*u.min):
+        """Calculate time windows when the field is observable.
+
+        Parameters
+        ----------
+        telescope : Telescope
+            Telescope for which to calculate observability.
+        frame : astropy.coordinates.AltAz
+            Frame that provides the time steps at which observability is
+            initially tested.
+        refine : astropy.units.Quantity, optional
+            Must be a time unit. If given, the precision of the observable time
+            window is refined to this value. I.e. if the interval given in
+            'frame' is 10 minutes and refine=1*u.min the window limits will be
+            accurate to a minute. The default is 0*u.min.
+
+        Returns
+        -------
+        obs_windows : list
+            List of tuples. Each tuple contains two astropy.time.Time instances
+            that mark the earliest time and latest time of a window during
+            which the field is observable.
+
+        Notes
+        -----
+        This method uses a frame as input instead of a start and stop time
+        and interval, from which the frame could be created. The advantage is
+        that the same initial frame can be used for all fields.
+        """
+
+        obs_windows = []
+        temp_obs_windows = []
+        observable = telescope.constraints.get(self.center_coord, frame)
+        blocks = self._true_blocks(observable)
+
+        for i, j in blocks:
+            obs_window = (frame.obstime[i], frame.obstime[j])
+            temp_obs_windows.append(obs_window)
+
+        # increase precision for actual observing windows:
+        if refine.value:
+            time_interval = frame.obstime[1] - frame.obstime[0]
+
+            # iterate through time windows:
+            for t_start, t_stop in temp_obs_windows:
+                # keep start time:
+                if t_start == frame.obstime[0]:
+                    pass
+                # higher precision for start time:
+                else:
+                    t_start_new = t_start - time_interval
+                    frame = telescope.get_frame(t_start_new, t_start, refine)
+                    observable = telescope.constraints.get(
+                            self.center_coord, frame)
+                    k = np.argmax(observable)
+                    t_start = frame.obstime[k]
+
+                # keep stop time:
+                if t_stop == frame.obstime[-1]:
+                    pass
+                # higher precision for stop time:
+                else:
+                    t_stop_new = t_stop + time_interval
+                    frame = telescope.get_frame(t_stop, t_stop_new, refine)
+                    observable = telescope.constraints.get(
+                            self.center_coord, frame)
+                    k = (frame.obstime.value.size - 1
+                         - np.argmax(observable[::-1]))
+                    t_stop = frame.obstime[k]
+
+                #obs_windows.append(ObsWindow(t_start, t_stop)) # TODO
+                obs_windows.append((t_start, t_stop))
+
+        # in case of no precision refinement:
+        else:
+            for t_start, t_stop in temp_obs_windows:
+                #obs_windows.append(ObsWindow(t_start, t_stop)) # TODO
+                obs_windows.append((t_start, t_stop))
+
+        return obs_windows
+
+    #--------------------------------------------------------------------------
+    def get_obs_duration(self):
+        """Get the total duration of all observing windows.
+
+        Returns
+        -------
+        duration : astropy.units.Quantity
+            The duration in hours.
+        """
+
+        duration = 0 * u.day
+
+        for obs_window in self.obs_windows:
+            duration += obs_window.duration
+
+        return duration
+
+    #--------------------------------------------------------------------------
+    def add_obs_window(self, obs_window):
+        """Add observation window(s) to field.
+
+        Parameters
+        ----------
+        obs_window : ObsWindow or list
+            Observation window(s) that is/are added to the field. If multiple
+            windows should be added provide a list of ObsWindow instances.
+
+        Returns
+        -------
+        None.
+        """
+
+        if isinstance(obs_window, list):
+            self.obs_windows += obs_window
+        else:
+            self.obs_windows.append(obs_window)
+
+    #--------------------------------------------------------------------------
+    def set_status(
+            self, rising=None, plateauing=None, setting=None, setting_in=None,
+            not_available=None):
+        """Set the field status.
+
+        Parameters
+        ----------
+        rising : bool, optional
+            True, if the field is rising. The default is None.
+        plateauing : bool, optional
+            True, if the field is neither rising nor setting. The default is
+            None.
+        setting : bool, optional
+            True, if the field is setting. The default is None.
+        setting_in : astropy.unit.Quantity, optional
+            The duration until the field is setting. The default is None.
+        not_available : bool, optional
+            True, if the status is unknown. The default is None.
+
+        Returns
+        -------
+        None.
+        """
+
+        if not_available:
+            self.status = -1
+        elif rising:
+            self.status = 1
+        elif plateauing:
+            self.status = 2
+        elif setting:
+            self.status = 3
+            self.setting_in = setting_in
+
+    #--------------------------------------------------------------------------
+    def set_priority(self, priority):
+        """Set priority.
+
+        Parameters
+        ----------
+        priority : float
+            Priority value assigned to this field.
+
+        Returns
+        -------
+        None
+        """
+
+        self.priority = priority
+
 #==============================================================================
 
 class ObsWindow:
@@ -340,7 +651,7 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def _tuple_to_field(self, field_tuple):
         """Convert a tuple that contains field information as queried from the
-        database to a skyfields.Field instance.
+        database to a Field instance.
 
         Parameters
         ----------
@@ -349,7 +660,7 @@ class SurveyPlanner:
 
         Returns
         -------
-        field : skyfields.Field
+        field : Field
             A field instance created from the database entries.
         """
 
@@ -408,7 +719,7 @@ class SurveyPlanner:
 
         Yields
         ------
-        field : skyfields.Field
+        field : Field
             Fields as stored in the database.
         """
 
@@ -427,7 +738,7 @@ class SurveyPlanner:
 
         Parameters
         ----------
-        field : skyfields.Field
+        field : Field
             A field.
         date : astropy.time.Time
             Date and time for which to determine the field's status.
@@ -458,9 +769,10 @@ class SurveyPlanner:
         # start and end date:
         date_start = date - days_before * u.d
         date_stop = date + days_after * u.d
+        latest_obs_window_jd = field.latest_obs_window_jd
 
         # check that obs windows are available for time range
-        if date_stop.jd > field.latest_obs_window_jd:
+        if date_stop.jd > latest_obs_window_jd:
             warn(f"Calculate observing windows until {date_stop.iso[:10]}.")
 
         # get observing windows:
@@ -475,15 +787,19 @@ class SurveyPlanner:
         if n_windows == 0:
             field.set_status(not_available=True)
 
-        # check status - unclear:
-        elif n_windows < 4:
+        # check status - only one observing windows:
+        elif n_windows == 1:
+            # Note: single appearance at last day could be rising or really
+            # just a single appearance, defacto rising/plateauing/setting.
+            # Single appearance at first day could be setting of just a single
+            # appearance. Single appearance in middle would be indeed a single
+            # appearance, unless no observing windows have been estimated the
+            # before the current date and a setting source therefore appears as
+            # single appearance.
+            # We do not differenciate these cases. Classify as undetermined.
+            # Rising/setting sources will be classified as such the
+            # next/earlier day. Single-appearance sources should not be common.
             pass
-            # TODO: there are two options for this happening:
-            # (1) obs windows have not been calculated long enough into the
-            # past/furture, this should be checked in the start and a warning
-            # should be raised.
-            # (2) the field is setting within four days, then better just mark
-            # it as setting - think this through, is this really the case?
 
         # check status - rising/plateauing/setting:
         else:
@@ -492,7 +808,7 @@ class SurveyPlanner:
             result = linregress(x, durations)
 
             # check status - plateauing:
-            if result.pvalue >= 0.01:
+            if result.pvalue >= 0.1:
                 field.set_status(plateauing=True)
 
             # check status - rising:
@@ -536,7 +852,7 @@ class SurveyPlanner:
 
         Yields
         ------
-        field : skyfields.Field
+        field : Field
             Field(s) fulfilling the selected criteria.
         """
 
@@ -611,7 +927,7 @@ class SurveyPlanner:
 
         Yields
         ------
-        field : skyfields.Field
+        field : Field
             Field(s) fulfilling the selected criteria.
         """
 
@@ -675,7 +991,7 @@ class SurveyPlanner:
 
         Yields
         ------
-        field : skyfields.Field
+        field : Field
             Field(s) fulfilling the selected criteria.
         """
 
@@ -731,7 +1047,7 @@ class SurveyPlanner:
 
         Returns
         ------
-        observable_fields : list of skyfields.Field
+        observable_fields : list of Field
             Field(s) fulfilling the selected criteria.
         """
 
@@ -806,7 +1122,7 @@ class SurveyPlanner:
 
         Yields
         ------
-        field : skyfields.Field
+        field : Field
             Field(s) fulfilling the selected criteria.
         """
 
@@ -844,7 +1160,7 @@ class SurveyPlanner:
 
         Yields
         ------
-        field : list of skyfields.Field
+        field : list of Field
             Field(s) fulfilling the selected criteria.
         """
 
@@ -873,7 +1189,7 @@ class SurveyPlanner:
 
         Returns
         -------
-        field : skyfields.Field
+        field : Field
             Field as stored in the database under specified ID.
         """
 
@@ -906,7 +1222,7 @@ class SurveyPlanner:
 
         Yields
         -------
-        field : skyfields.Field
+        field : Field
             Field as stored in the database under specified ID.
         """
 
@@ -1221,7 +1537,7 @@ class Prioritizer:
 
         Parameters
         ----------
-        fields : list of skyfields.Field
+        fields : list of Field
             The fields that a priority is assigned to.
         radius : astropy.units.Quantity
             Radius in which to count field neighbors. Needs to be a Quantity
@@ -1286,7 +1602,7 @@ class Prioritizer:
 
         Parameters
         ----------
-        fields : ist of skyfields.Field
+        fields : ist of Field
             The fields that a priority is assigned to.
         rising : bool, optional
             If True, prioritize a field if it is rising. The default is False.
@@ -1331,13 +1647,13 @@ class Prioritizer:
         ----------
         priorities : numpy.ndarray
             The priority corresponding to each field.
-        fields : list of skyfields.Field
+        fields : list of Field
             The fields that the priorities correspond to and should be added
             to.
 
         Returns
         -------
-        fields : list of skyfields.Field
+        fields : list of Field
             The same list of Field instances, now with priorities stored.
         """
 
@@ -1356,7 +1672,7 @@ class Prioritizer:
 
         Parameters
         ----------
-        fields : ist of skyfields.Field
+        fields : ist of Field
             The fields that a priority is assigned to.
         weight_coverage : float or int, optional
             Weight assigned to the sky coverage priorities. The default is 0..
@@ -1398,7 +1714,7 @@ class Prioritizer:
 
         Returns
         -------
-        fields : list of skyfields.Field
+        fields : list of Field
             The input fields now with priorities added.
         optional:
         priority : dict of numpy.ndarray
