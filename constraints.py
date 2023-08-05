@@ -442,7 +442,7 @@ class HourangleLimit(Constraint):
             Description of the class instance and its parameters.
         """
 
-        if self.Limit_hi == self.limit_lo:
+        if self.limit_hi == self.limit_lo:
             info = 'Hourangle limit: +/-{0:.2f}'.format(self.limit_hi)
         else:
             info = 'Hourangle limit:\n'
