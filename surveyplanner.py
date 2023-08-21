@@ -1235,7 +1235,7 @@ class SurveyPlanner:
             yield field
 
     #--------------------------------------------------------------------------
-    def add_obs_windows(self, date_stop, date_start=None):
+    def add_obs_windows(self, date_stop, date_start=None, batch_write=10000):
         """Calculate observation windows for all active fields and add them to
         the database.
 
@@ -1249,6 +1249,9 @@ class SurveyPlanner:
             information is truncated. If not set, observation windows will be
             calculated starting with the date at which the last calculation
             stopped. The default is None.
+        batch_write : int, optional
+            Observing windows will be gathered up to this number and then
+            written as a batch to the database. The default is 10000.
 
         Returns
         -------
@@ -1261,6 +1264,12 @@ class SurveyPlanner:
         jd_stop = date_stop.jd
         user_agrees = False
 
+        # temporary data storages:
+        self.batch_field_ids  = []
+        self.batch_obs_windows_start = []
+        self.batch_obs_windows_stop = []
+        self.batch_jd_stop = {}
+
         # connect to database:
         db = DBConnectorSQLite(self.dbname)
 
@@ -1269,14 +1278,28 @@ class SurveyPlanner:
             observatory_name = observatory['name']
             print(f'Observatory {i+1} of {m} selected: {observatory_name}')
 
+            # get fields that need observing window calculations:
+            fields_tbd = db.get_fields(
+                    observatory=observatory_name, needs_obs_windows=jd_stop)
+            n_fields_tbd = len(fields_tbd)
+
+            # if all done, skip to next observatory:
+            if n_fields_tbd == 0:
+                print('Observing windows already stored for all fields up to '
+                      f'JD {jd_stop}.')
+                continue
+
             # setup observatory with constraints:
             self._setup_observatory(observatory_name)
 
-            # iterate through fields associated with observatory:
-            for j, n, field in db.iter_fields(
-                    observatory=observatory_name, active=True):
+            print(f'{n_fields_tbd} require calculation of observing windows..')
 
-                print(f'\rField {j+1} of {n} ({j/n*100:.1f}%)..', end='')
+            # iterate through fields associated with observatory:
+            for j, field in enumerate(fields_tbd):
+
+                print('\rField {0} of {1} ({2:.1f}%)..'.format(
+                        j+1, n_fields_tbd, j/n_fields_tbd*100),
+                      end='')
 
                 # create Field object from tuple data:
                 field_id = field[0]
@@ -1332,28 +1355,77 @@ class SurveyPlanner:
 
                 # iterate through days:
                 for jd in np.arange(jd_start, jd_stop, 1.):
+
                     # calculate observing windows:
                     date = Time(jd, format='jd').datetime
                     time_sunset, time_sunrise = \
                         self.telescope.get_sun_set_rise(
                                 date.year, date.month, date.day, self.twilight)
-                    time_interval = 10. * u.min
+                    time_interval_init = 10. * u.min
+                    time_interval_refine = 1. * u.min
                     frame = self.telescope.get_frame(
-                            time_sunset, time_sunrise, time_interval)
+                            time_sunset, time_sunrise, time_interval_init)
                     obs_windows = field.get_obs_window(
-                            self.telescope, frame, refine=1*u.min)
+                            self.telescope, frame, refine=time_interval_refine)
+                    self.batch_jd_stop[field_id] = jd + 1
 
                     # add observing windows to database:
                     for obs_window_start, obs_window_stop in obs_windows:
-                        db.add_obs_window(
-                                field_id, obs_window_start, obs_window_stop,
-                                active=True)
+                        self.batch_field_ids.append(field_id)
+                        self.batch_obs_windows_start.append(obs_window_start)
+                        self.batch_obs_windows_stop.append(obs_window_stop)
 
-                # update Field information in data base:
-                db.update_next_obs_window(field_id, jd_stop)
+                        # batch write to database:
+                        if len(self.batch_field_ids) >= batch_write:
+                            self._add_obs_windows_to_db(db)
 
-            print(f'\rField {j+1} of {n} (100%)   ')
+            # batch write to database:
+            self._add_obs_windows_to_db(db)
+
+            print(f'\rField {j+1} of {n_fields_tbd} (100%)      ')
+
+        # remove temporary storages:
+        del self.batch_field_ids
+        del self.batch_obs_windows_start
+        del self.batch_obs_windows_stop
+        del self.batch_jd_stop
+
         print('Calculating observing windows done.')
+
+    #--------------------------------------------------------------------------
+    def _add_obs_windows_to_db(self, db):
+        """Add observing windows to the database.
+
+        Parameters
+        ----------
+        db : db.DBConnectorSQLite
+            Connection to the database.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method adds observing windows to the database in a batch and
+        updates the jd_next_obs_window entries in the Fields table.
+        """
+
+        if len(self.batch_field_ids):
+            db.add_obs_windows(
+                    self.batch_field_ids, self.batch_obs_windows_start,
+                    self.batch_obs_windows_stop, active=True)
+
+        # update Field information in data base:
+        db.update_next_obs_window(
+                list(self.batch_jd_stop.keys()),
+                list(self.batch_jd_stop.values()))
+
+        # reset data storages:
+        self.batch_field_ids = []
+        self.batch_obs_windows_start = []
+        self.batch_obs_windows_stop = []
+        self.batch_jd_stop = {}
 
     #--------------------------------------------------------------------------
     def iter_field_ids_in_circles(

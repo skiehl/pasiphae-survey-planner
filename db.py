@@ -901,7 +901,8 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def get_fields(
-            self, observatory=None, observed=None, pending=None, active=True):
+            self, observatory=None, observed=None, pending=None, active=True,
+            needs_obs_windows=None):
         """Get fields from the database, given various selection criteria.
 
         Parameters
@@ -924,6 +925,9 @@ class DBConnectorSQLite:
             If True, only query active fields. If False, only query inactive
             fields. If None, query fields independent of whether they are
             active or not. The default is True.
+        needs_obs_window : float, optional
+            If JD is given, only fields are returned that need additional
+            observing window calculations up to this JD. The default is None.
 
         Returns
         -------
@@ -954,6 +958,13 @@ class DBConnectorSQLite:
         else:
             condition_observatory = ""
 
+        # set query condition for observing window requirement:
+        if observatory:
+            condition_obswindow = " AND jd_next_obs_window < '{0}'".format(
+                    needs_obs_windows)
+        else:
+            condition_obswindow = ""
+
         # query data base:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
@@ -970,17 +981,18 @@ class DBConnectorSQLite:
                 	GROUP BY field_id
                 	) AS p
                 ON f.field_id = p.field_id
-                WHERE (active = {0} {1} {2} {3});
+                WHERE (active = {0} {1} {2} {3} {4});
                 """.format(
                         active, condition_observatory, condition_observed,
-                        condition_pending)
+                        condition_pending, condition_obswindow)
             result = self._query(connection, query).fetchall()
 
         return result
 
     #--------------------------------------------------------------------------
     def iter_fields(
-            self, observatory=None, observed=None, pending=None, active=True):
+            self, observatory=None, observed=None, pending=None, active=True,
+            needs_obs_window=None):
         """Query fields from the database, given various selection criteria,
         and iterate through the results.
 
@@ -1004,6 +1016,9 @@ class DBConnectorSQLite:
             If True, only query active fields. If False, only query inactive
             fields. If None, query fields independent of whether they are
             active or not. The default is True.
+        needs_obs_window : float, optional
+            If JD is given, only fields are returned that need additional
+            observing window calculations up to this JD. The default is None.
 
         Yields
         ------
@@ -1023,7 +1038,7 @@ class DBConnectorSQLite:
 
         fields = self.get_fields(
                 observatory=observatory, observed=observed, pending=pending,
-                active=active)
+                active=active, needs_obs_windows=needs_obs_window)
         n = len(fields)
 
         for i, field in enumerate(fields):
@@ -1169,16 +1184,16 @@ class DBConnectorSQLite:
         return constraints
 
     #--------------------------------------------------------------------------
-    def add_obs_window(self, field_id, date_start, date_stop, active=True):
+    def add_obs_windows(self, field_ids, dates_start, dates_stop, active=True):
         """Add observation window for a specific field to database.
 
         Parameters
         ----------
-        field_id : int
+        field_ids : int or list of int
             ID of the field that the observation window is associated with.
-        date_start : astropy.time.Time
+        dates_start : astropy.time.Time or list of Time-instances
             Start date and time of the observing window.
-        date_stop : astropy.time.Time
+        dates_stop : astropy.time.Time or list of Time-instances
             Stop date and time of the observing window.
         active : bool, optional
             If True, the observing windows is added as active, as inactive
@@ -1189,27 +1204,39 @@ class DBConnectorSQLite:
         None
         """
 
-        duration = (date_stop - date_start).value
+        # check input:
+        if isinstance(field_ids, int):
+            field_ids = [field_ids]
+            dates_start = [dates_start]
+            dates_stop = [dates_stop]
 
+        # prepare data:
+        data = []
+
+        for field_id, date_start, date_stop in zip(
+                field_ids, dates_start, dates_stop):
+            duration = (date_stop - date_start).value
+            data.append((
+                    field_id, date_start.iso, date_stop.iso, duration, active))
+
+        # add observation windows to database:
         with SQLiteConnection(self.db_file) as connection:
-            # add observatory to database:
             query = """\
                 INSERT INTO ObsWindows (
                     field_id, date_start, date_stop, duration, active)
-                VALUES ({0}, '{1}', '{2}', {3}, {4});
-                """.format(
-                    field_id, date_start.iso, date_stop.iso, duration, active)
-            self._query(connection, query, commit=True)
+                VALUES (?, ?, ?, ?, ?);
+                """
+            self._query(connection, query, many=data, commit=True)
 
     #--------------------------------------------------------------------------
-    def update_next_obs_window(self, field_id, jd):
-        """Update a field's database entry for the next observing window.
+    def update_next_obs_window(self, field_ids, jds):
+        """Update fields' database entries for the next observing window.
 
         Parameters
         ----------
-        field_id : int
+        field_id : int or list of int
             ID of the associated field.
-        jd : float
+        jd : float or list of floar
             Julian date of the next day for which the next observing window
             needs to be calculated for the specified field.
 
@@ -1218,14 +1245,22 @@ class DBConnectorSQLite:
         None
         """
 
+        # check input:
+        if isinstance(field_ids, int):
+            field_ids = [field_ids]
+            jds = [jds]
+
         with SQLiteConnection(self.db_file) as connection:
-            # add observatory to database:
-            query = """\
-                UPDATE Fields
-                SET jd_next_obs_window='{0}'
-                WHERE field_id={1};
-                """.format(jd, field_id)
-            self._query(connection, query, commit=True)
+            # iterate though fields:
+            for field_id, jd in zip(field_ids, jds):
+                query = """\
+                    UPDATE Fields
+                    SET jd_next_obs_window='{0}'
+                    WHERE field_id={1};
+                    """.format(jd, field_id)
+                self._query(connection, query, commit=False)
+
+            connection.commit()
 
     #--------------------------------------------------------------------------
     def get_obs_windows_from_to(self, field_id, date_start, date_stop):
