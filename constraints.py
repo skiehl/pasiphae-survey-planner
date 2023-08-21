@@ -131,9 +131,31 @@ class Constraints(object):
             constraints, and False otherwise.
         """
 
-        observable = np.logical_and.reduce(
-                [constraint.get(source_coord, frame) \
-                 for constraint in self.constraints])
+        # TODO: remove after tests:
+        # this is the old version that runs slower
+        #if False:
+        #    observable = np.logical_and.reduce(
+        #            [constraint.get(source_coord, frame) \
+        #             for constraint in self.constraints])
+        #    return observable
+
+        if len(self.constraints) == 0:
+            observable = np.ones(frame.obstime.size, dtype=bool)
+
+        elif len(self.constraints) == 1:
+            observable = self.constraints[0].get(source_coord, frame)
+
+        else:
+            observable = self.constraints[0].get(source_coord, frame)
+
+            for constraint in self.constraints[1:]:
+
+                # stop evaluating constraints, if source is not observable:
+                if not np.any(observable):
+                    break
+
+                observable = np.logical_and(
+                        observable, constraint.get(source_coord, frame))
 
         return observable
 
