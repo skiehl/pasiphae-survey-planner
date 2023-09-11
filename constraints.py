@@ -4,7 +4,7 @@
 """
 
 from abc import ABCMeta, abstractmethod
-from astropy.coordinates import get_sun, get_moon
+from astropy.coordinates import AltAz, get_sun, get_moon
 import astropy.units as u
 import numpy as np
 from textwrap import dedent
@@ -113,7 +113,7 @@ class Constraints(object):
         self.size += 1
 
     #--------------------------------------------------------------------------
-    def get(self, source_coord, frame):
+    def get(self, source_coord, frame, sel=None):
         """Evaluate all constraints jointly.
 
         Parameters
@@ -131,14 +131,6 @@ class Constraints(object):
             constraints, and False otherwise.
         """
 
-        # TODO: remove after tests:
-        # this is the old version that runs slower
-        #if False:
-        #    observable = np.logical_and.reduce(
-        #            [constraint.get(source_coord, frame) \
-        #             for constraint in self.constraints])
-        #    return observable
-
         if len(self.constraints) == 0:
             observable = np.ones(frame.obstime.size, dtype=bool)
 
@@ -154,8 +146,10 @@ class Constraints(object):
                 if not np.any(observable):
                     break
 
-                observable = np.logical_and(
-                        observable, constraint.get(source_coord, frame))
+                # update observability with additional constraint, only where
+                # observable:
+                observable[observable] = constraint.get(
+                        source_coord, frame, observable)
 
         return observable
 
@@ -226,7 +220,7 @@ class Constraint(object, metaclass=ABCMeta):
 
     #--------------------------------------------------------------------------
     @abstractmethod
-    def get(self, source_coord, frame):
+    def get(self, source_coord, frame, sel=None):
         """Evaluate the constraint for a given target, a specific location and
         time.
 
@@ -236,6 +230,10 @@ class Constraint(object, metaclass=ABCMeta):
             Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
+        sel : np.ndarray or None
+            If not None, the array must be of boolean type. The constraint is
+            evaluated only for times where this array is True. The default is
+            None.
 
         Returns
         -------
@@ -308,7 +306,7 @@ class AirmassLimit(Constraint):
         return 'Airmass limit: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
-    def get(self, source_coord, frame):
+    def get(self, source_coord, frame, sel=None):
         """Evaluate the constraint for a given target, a specific location and
         time.
 
@@ -318,6 +316,10 @@ class AirmassLimit(Constraint):
             Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
+        sel : np.ndarray or None
+            If not None, the array must be of boolean type. The constraint is
+            evaluated only for times where this array is True. The default is
+            None.
 
         Returns
         -------
@@ -326,6 +328,9 @@ class AirmassLimit(Constraint):
             The entry is True, if the source is observable according to the
             constraint, and False otherwise.
         """
+
+        if sel is not None:
+            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
 
         altaz = source_coord.transform_to(frame)
         observable = ut.alt_to_airmass(altaz.alt, conversion=self.conversion) \
@@ -385,7 +390,7 @@ class ElevationLimit(Constraint):
         return 'Elevation limit: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
-    def get(self, source_coord, frame):
+    def get(self, source_coord, frame, sel=None):
         """Evaluate the constraint for a given target, a specific location and
         time.
 
@@ -403,6 +408,9 @@ class ElevationLimit(Constraint):
             The entry is True, if the source is observable according to the
             constraint, and False otherwise.
         """
+
+        if sel is not None:
+            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
 
         altaz = source_coord.transform_to(frame)
         observable = altaz.alt >= self.limit
@@ -474,7 +482,7 @@ class HourangleLimit(Constraint):
         return info
 
     #--------------------------------------------------------------------------
-    def get(self, source_coord, frame):
+    def get(self, source_coord, frame, sel=None):
         """Evaluate the constraint for a given target, a specific location and
         time.
 
@@ -484,6 +492,10 @@ class HourangleLimit(Constraint):
             Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
+        sel : np.ndarray or None
+            If not None, the array must be of boolean type. The constraint is
+            evaluated only for times where this array is True. The default is
+            None.
 
         Returns
         -------
@@ -492,6 +504,9 @@ class HourangleLimit(Constraint):
             The entry is True, if the source is observable according to the
             constraint, and False otherwise.
         """
+
+        if sel is not None:
+            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
 
         # get hourangles:
         lst = frame.obstime.sidereal_time(
@@ -558,7 +573,7 @@ class MoonDistance(Constraint):
         return 'Moon distance: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
-    def get(self, source_coord, frame):
+    def get(self, source_coord, frame, sel=None):
         """Evaluate the constraint for a given target, a specific location and
         time.
 
@@ -568,6 +583,10 @@ class MoonDistance(Constraint):
             Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
+        sel : np.ndarray or None
+            If not None, the array must be of boolean type. The constraint is
+            evaluated only for times where this array is True. The default is
+            None.
 
         Returns
         -------
@@ -585,6 +604,10 @@ class MoonDistance(Constraint):
             moon_altaz = get_moon(frame.obstime).transform_to(frame)
             self.moon_altaz = moon_altaz
             self.last_frame = frame
+
+        if sel is not None:
+            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
+            moon_altaz = moon_altaz[sel]
 
         source_altaz = source_coord.transform_to(frame)
         separation = source_altaz.separation(moon_altaz)
@@ -649,7 +672,7 @@ class MoonPolarization(Constraint):
         return 'Moon polarization: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
-    def get(self, source_coord, frame):
+    def get(self, source_coord, frame, sel=None):
         """Evaluate the constraint for a given target, a specific location and
         time.
 
@@ -659,6 +682,10 @@ class MoonPolarization(Constraint):
             Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
+        sel : np.ndarray or None
+            If not None, the array must be of boolean type. The constraint is
+            evaluated only for times where this array is True. The default is
+            None.
 
         Returns
         -------
@@ -676,6 +703,10 @@ class MoonPolarization(Constraint):
             moon_altaz = get_moon(frame.obstime).transform_to(frame)
             self.moon_altaz = moon_altaz
             self.last_frame = frame
+
+        if sel is not None:
+            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
+            moon_altaz = moon_altaz[sel]
 
         source_altaz = source_coord.transform_to(frame)
         separation = source_altaz.separation(moon_altaz)
@@ -866,7 +897,7 @@ class PolyHADecLimit(Constraint):
         return is_inside
 
     #--------------------------------------------------------------------------
-    def get(self, source_coord, frame):
+    def get(self, source_coord, frame, sel=None):
         """Evaluate the constraint for a given target, a specific location and
         time.
 
@@ -876,6 +907,10 @@ class PolyHADecLimit(Constraint):
             Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
+        sel : np.ndarray or None
+            If not None, the array must be of boolean type. The constraint is
+            evaluated only for times where this array is True. The default is
+            None.
 
         Returns
         -------
@@ -884,6 +919,9 @@ class PolyHADecLimit(Constraint):
             The entry is True, if the source is observable according to the
             constraint, and False otherwise.
         """
+
+        if sel is not None:
+            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
 
         # create array of hourangle-declination points:
         lst = frame.obstime.sidereal_time(
@@ -950,7 +988,7 @@ class SunDistance(Constraint):
         return 'Sun distance: {0:.2f}'.format(self.limit)
 
     #--------------------------------------------------------------------------
-    def get(self, source_coord, frame):
+    def get(self, source_coord, frame, sel=None):
         """Evaluate the constraint for a given target, a specific location and
         time.
 
@@ -960,6 +998,10 @@ class SunDistance(Constraint):
             Coordinates of the target source.
         frame : astropy.coordinates.builtin_frames.altaz.AltAz
             A coordinate or frame in the Altitude-Azimuth system.
+        sel : np.ndarray or None
+            If not None, the array must be of boolean type. The constraint is
+            evaluated only for times where this array is True. The default is
+            None.
 
         Returns
         -------
@@ -977,6 +1019,10 @@ class SunDistance(Constraint):
             sun_altaz = get_sun(frame.obstime).transform_to(frame)
             self.sun_altaz = sun_altaz
             self.last_frame = frame
+
+        if sel is not None:
+            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
+            sun_altaz = sun_altaz[sel]
 
         source_altaz = source_coord.transform_to(frame)
         sun_altaz = get_sun(frame.obstime).transform_to(frame)
