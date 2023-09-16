@@ -226,7 +226,7 @@ class Field:
                     t_start_new = t_start - time_interval
                     frame = telescope.get_frame(t_start_new, t_start, refine)
                     observable = telescope.constraints.get(
-                            self.center_coord, frame)
+                            self.center_coord, frame, check_frame=False)
                     k = np.argmax(observable)
                     t_start = frame.obstime[k]
 
@@ -238,7 +238,7 @@ class Field:
                     t_stop_new = t_stop + time_interval
                     frame = telescope.get_frame(t_stop, t_stop_new, refine)
                     observable = telescope.constraints.get(
-                            self.center_coord, frame)
+                            self.center_coord, frame, check_frame=False)
                     k = (frame.obstime.value.size - 1
                          - np.argmax(observable[::-1]))
                     t_stop = frame.obstime[k]
