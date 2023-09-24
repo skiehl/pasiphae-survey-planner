@@ -880,6 +880,7 @@ class DBConnectorSQLite:
                     observatory_id integer
                         REFERENCES Observatories (observatory_id),
                     active boolean,
+                    jd_first_obs_window float,
                     jd_next_obs_window float)
                 """
             self._query(connection, query, commit=True)
@@ -1194,7 +1195,7 @@ class DBConnectorSQLite:
     #--------------------------------------------------------------------------
     def get_fields(
             self, observatory=None, observed=None, pending=None, active=True,
-            needs_obs_windows=None):
+            needs_obs_windows=None, init_obs_windows=False):
         """Get fields from the database, given various selection criteria.
 
         Parameters
@@ -1220,6 +1221,15 @@ class DBConnectorSQLite:
         needs_obs_window : float, optional
             If JD is given, only fields are returned that need additional
             observing window calculations up to this JD. The default is None.
+        init_obs_windows : bool, optional
+            If True, query field that do not have any observing windows stored
+            yet. The default is False.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `needs_obs_window` is set and `init_obs_windows=True`.
+            Only one option can be selected at a time.
 
         Returns
         -------
@@ -1227,6 +1237,12 @@ class DBConnectorSQLite:
             List of the queried fields. Each tuple contains the field
             parameters.
         """
+
+        # check input:
+        if needs_obs_windows is not None and init_obs_windows:
+            raise ValueError(
+                    'Either set `needs_obs_window` OR use '\
+                    '`init_obs_windows=True`.')
 
         # set query condition for observed or not:
         if observed is None:
@@ -1251,9 +1267,11 @@ class DBConnectorSQLite:
             condition_observatory = ""
 
         # set query condition for observing window requirement:
-        if observatory:
+        if needs_obs_windows:
             condition_obswindow = " AND jd_next_obs_window < '{0}'".format(
                     needs_obs_windows)
+        elif init_obs_windows:
+            condition_obswindow = " AND jd_next_obs_window IS NULL"
         else:
             condition_obswindow = ""
 
@@ -1262,8 +1280,8 @@ class DBConnectorSQLite:
             query = """\
                 SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
                     f.tilt, o.name observatory, f.active,
-                    f.jd_next_obs_window, p.nobs_tot, p.nobs_done,
-                    p.nobs_tot - p.nobs_done AS nobs_pending
+                    f.jd_first_obs_window, f.jd_next_obs_window, p.nobs_tot,
+                    p.nobs_done, p.nobs_tot - p.nobs_done AS nobs_pending
                 FROM Fields AS f
                 LEFT JOIN Observatories AS o
                     ON f.observatory_id = o.observatory_id
@@ -1553,6 +1571,47 @@ class DBConnectorSQLite:
                 self._query(connection, query, commit=False)
 
             connection.commit()
+
+    #--------------------------------------------------------------------------
+    def init_obs_window_jd(self, field_ids, jd):
+        """Set JD of first observing window calculation for new fields.
+
+        Parameters
+        ----------
+        field_ids : list of int
+            List of field IDs.
+        jd : float
+            JD of the first observing window calculation for the fields with
+            IDs given by the first argument.
+
+        Returns
+        -------
+        None
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            # iterate though fields:
+            for field_id in field_ids:
+                query = """\
+                    UPDATE Fields
+                    SET jd_first_obs_window='{0}'
+                    WHERE field_id={1};
+                    """.format(jd, field_id)
+                self._query(connection, query, commit=False)
+
+            connection.commit()
+
+    #--------------------------------------------------------------------------
+    def get_latest_obs_window_jd(self):
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """
+            SELECT MIN(jd_next_obs_window) FROM Fields
+            WHERE active=1
+            """
+            jd = self._query(connection, query).fetchall()[0][0]
+
+        return jd
 
     #--------------------------------------------------------------------------
     def get_obs_windows_from_to(self, field_id, date_start, date_stop):

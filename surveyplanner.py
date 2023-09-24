@@ -38,8 +38,8 @@ class Field:
     #--------------------------------------------------------------------------
     def __init__(
             self, fov, center_ra, center_dec, tilt=0., field_id=None,
-            latest_obs_window_jd=None, n_obs_tot=0, n_obs_done=0,
-            n_obs_pending=0):
+            jd_first_obs_window=None, jd_next_obs_window=None, n_obs_tot=0,
+            n_obs_done=0, n_obs_pending=0):
         """A field in the sky.
 
         Parameters
@@ -55,7 +55,10 @@ class Field:
             parallel to the horizon. The default is 0..
         field_id : int, optional
             ID of the field. The default is None.
-        latest_obs_window_jd : float, optional
+        jd_first_obs_window : float, optional
+            The earliest Julian date for which an observing window was
+            calculated for this field. The default is None.
+        jd_next_obs_window : float, optional
             The latest Julian date for which an observing window was calculated
             for this field. The default is None.
         n_obs_tot : int, optional
@@ -79,7 +82,8 @@ class Field:
         self.center_ra = self.center_coord.ra
         self.center_dec = self.center_coord.dec
         self.tilt = Angle(tilt, unit='rad')
-        self.latest_obs_window_jd = latest_obs_window_jd
+        self.jd_first_obs_window = jd_first_obs_window
+        self.jd_next_obs_window = jd_next_obs_window
         self.obs_windows = []
         self.status = 0
         self.setting_in = -1
@@ -668,11 +672,12 @@ class SurveyPlanner:
         """
 
         field_id, fov, center_ra, center_dec, tilt, __, __, \
-                latest_obs_window_jd, n_obs_tot, n_obs_done, n_obs_pending \
-                = field_tuple
+                jd_first_obs_window, jd_next_obs_window, n_obs_tot, \
+                n_obs_done, n_obs_pending = field_tuple
         field = Field(
             fov, center_ra, center_dec, tilt, field_id=field_id,
-            latest_obs_window_jd=latest_obs_window_jd, n_obs_tot=n_obs_tot,
+            jd_first_obs_window=jd_first_obs_window,
+            jd_next_obs_window=jd_next_obs_window, n_obs_tot=n_obs_tot,
             n_obs_done=n_obs_done, n_obs_pending=n_obs_pending)
 
         return field
@@ -772,10 +777,10 @@ class SurveyPlanner:
         # start and end date:
         date_start = date - days_before * u.d
         date_stop = date + days_after * u.d
-        latest_obs_window_jd = field.latest_obs_window_jd
+        jd_next_obs_window = field.jd_next_obs_window
 
         # check that obs windows are available for time range
-        if date_stop.jd > latest_obs_window_jd:
+        if date_stop.jd > jd_next_obs_window:
             warn(f"Calculate observing windows until {date_stop.iso[:10]}.")
 
         # get observing windows:
@@ -958,9 +963,9 @@ class SurveyPlanner:
             yield field
 
     #--------------------------------------------------------------------------
-    def _obs_window_time_range(
-            self, date_stop, date_start, fields_tbd, agreed_to_gaps):
-        """Determine the JD range for the observing window calculations.
+    def _obs_window_time_range_init(self, date_stop, date_start):
+        """Determine the JD range for the first observing window calculation
+        for new fields.
 
         Parameters
         ----------
@@ -968,7 +973,60 @@ class SurveyPlanner:
             The stop date and time of the observing window calculation.
         date_start : astropy.time.Time
             The stop date and time of the observing window calculation.
-        fields_tbd : list of Field instances
+
+        Raises
+        ------
+        ValueError
+            Raised if no start date is provided.
+        ValueError
+            Raised if the stop date is earlier than the start date.
+
+        Returns
+        -------
+        jd_start : float
+            The JD at which to start the observing window calculation.
+        jd_stop : float
+            The JD at which to stop the observing window calculation.
+        n_days : int
+            Number of days from start to stop date.
+        agreed_to_gaps : bool
+            True, if the user agreed to gaps in the observing window
+            calculations by skipping over some days. False, otherwise.
+
+        Notes
+        -----
+        This method is used by the _add_obs_windows() method.
+        """
+
+        # check input:
+        if date_start is None:
+            raise ValueError(
+                    "New fields require a start date. Set `date_start` when "
+                    "calling add_obs_windows().")
+
+        if date_start >= date_stop:
+            raise ValueError("Start date must be earlier than stop date.")
+
+        jd_stop = date_stop.jd
+        jd_start = date_start.jd
+        n_days = int(jd_stop - jd_start)
+
+        return jd_start, jd_stop, n_days
+
+    #--------------------------------------------------------------------------
+    def _obs_window_time_range(
+            self, db, date_stop, date_start, fields, agreed_to_gaps):
+        """Determine the JD range for the observing window calculations.
+
+        Parameters
+        ----------
+        db : db.DBConnectorSQLite
+            Active database connection.
+        date_stop : astropy.time.Time
+            The stop date and time of the observing window calculation.
+        date_start : astropy.time.Time
+            The stop date and time of the observing window calculation.
+        fields : list of Field instances
             The fields for which observing windows will be calculated.
         agreed_to_gaps : bool
             True, if the user agreed to gaps in the observing window
@@ -985,16 +1043,24 @@ class SurveyPlanner:
             The JD at which to start the observing window calculation.
         jd_stop : float
             The JD at which to stop the observing window calculation.
+        n_days : int
+            Number of days from start to stop date.
         agreed_to_gaps : bool
             True, if the user agreed to gaps in the observing window
             calculations by skipping over some days. False, otherwise.
 
         Notes
         -----
-        This method is used by the add_obs_windows() method.
+        This method is used by the _add_obs_windows() method.
         """
 
-        jd_done = min([field.latest_obs_window_jd for field in fields_tbd])
+        # TODO: the following is tricky. Init fields will result in the warning
+        # below, which does not make sense. I could easily turn it off, if
+        # jd_done==-1. However, if we have a mixture of init and non-init
+        # fields then the check is also off for the non-init fields.
+        # Should I treat init and non-init fields seperately?
+
+        jd_done = db.get_latest_obs_window_jd()
         date_done = Time(jd_done, format='jd')
         jd_stop = date_stop.jd
 
@@ -1056,13 +1122,13 @@ class SurveyPlanner:
             raise ValueError('Start date is later than stop date.')
 
         n_days = int(jd_stop - jd_start)
-        print(f'Calculate observing windows for {n_days} days..')
 
-        return jd_start, jd_stop, agreed_to_gaps
+        return jd_start, jd_stop, n_days, agreed_to_gaps
 
     #--------------------------------------------------------------------------
     def _read_from_queue(
-            self, queue_obs_windows, queue_field_ids, n):
+            self, queue_obs_windows, n):
+        # TODO: update docstring
         """Read results from the queues to be written to the database.
 
         Parameters
@@ -1103,10 +1169,10 @@ class SurveyPlanner:
             n = n_queued
 
         for __ in range(n):
-            batch_field_ids.append(queue_field_ids.get())
-            field_id, start, stop = queue_obs_windows.get()
+            field_id, obs_windows = queue_obs_windows.get()
+            batch_field_ids.append(field_id)
 
-            if start is not None:
+            for start, stop in obs_windows:
                 batch_obs_windows_ids.append(field_id)
                 batch_obs_windows_start.append(start)
                 batch_obs_windows_stop.append(stop)
@@ -1116,8 +1182,8 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _add_obs_windows_to_db(
-            self, db, queue_obs_windows, queue_field_ids, jd_next, n_tbd,
-            batch_write):
+            self, db, counter, queue_obs_windows, jd_next, n_tbd, batch_write):
+        # TODO: update docstring
         """Write observation windows to database.
 
         Parameters
@@ -1126,9 +1192,6 @@ class SurveyPlanner:
             Active database connection.
         queue_obs_windows : multiprocessing.managers.AutoProxy[Queue]
             Queue containing the observing windows.
-        queue_field_ids : multiprocessing.managers.AutoProxy[Queue]
-            Queue containing the IDs of fields whose `jd_next_obs_window` value
-            needs to be updated.
         jd_next : float
             JD for the next required observing window calculation that will be
             written to the database.
@@ -1148,35 +1211,26 @@ class SurveyPlanner:
         add_obs_windows() method.
         """
 
-        n_done = 0
-        n_queued = 0
-        run = True
+        done = False
 
-        while run:
-            if n_done + n_queued == n_tbd:
-                run = False
-
-            n_queued = queue_obs_windows.qsize()
-            n_status = n_done + n_queued
-            print(f'\rProgress: field {n_status} of {n_tbd} ' \
-                  f'({n_status/n_tbd*100:.1f}%)..', end='')
+        while not done:
             sleep(1)
+            n_done = counter.value
+            n_queued = queue_obs_windows.qsize()
+
+            if n_done >= n_tbd:
+                done = True
+
+            print(f'\rProgress: field {n_done} of {n_tbd} ' \
+                  f'({n_done/n_tbd*100:.1f}%)..           ', end='')
 
             # extract batch of results from queue:
-            if run and n_queued >= batch_write:
+            if done or n_queued >= batch_write:
+                print('\rProgress: reading from queue..                      ',
+                      end='')
                 batch_field_ids, batch_obs_windows_ids, \
                 batch_obs_windows_start, batch_obs_windows_stop \
-                = self._read_from_queue(
-                        queue_obs_windows, queue_field_ids, batch_write)
-                n_queried = len(batch_field_ids)
-                write = True
-
-            # extract remaining results from queue:
-            elif not run:
-                batch_field_ids, batch_obs_windows_ids, \
-                batch_obs_windows_start, batch_obs_windows_stop \
-                = self._read_from_queue(
-                        queue_obs_windows, queue_field_ids, n_queued)
+                = self._read_from_queue(queue_obs_windows, batch_write)
                 n_queried = len(batch_field_ids)
                 write = True
 
@@ -1185,6 +1239,9 @@ class SurveyPlanner:
 
             # write results to database:
             if write:
+                print(f'\rProgress: writing {n_queried} entries to database..',
+                      end='')
+
                 # add observing windows to database:
                 db.add_obs_windows(
                         batch_obs_windows_ids, batch_obs_windows_start,
@@ -1196,12 +1253,13 @@ class SurveyPlanner:
 
                 n_done += n_queried
 
-        print('')
+        print('\rProgress: done                                              ')
 
     #--------------------------------------------------------------------------
     def _find_obs_window_for_field(
-            self, queue_obs_windows, queue_field_ids, jd, frame, field,
-            refine):
+            self, counter, counter_lock, queue_obs_windows, jd, frame, field,
+            init, refine):
+        # TODO: update docstring
         """Calculate observing window(s) for a specific field for a specific
         time frame.
 
@@ -1209,9 +1267,6 @@ class SurveyPlanner:
         ----------
         queue_obs_windows : multiprocessing.managers.AutoProxy[Queue]
             Queue containing the observing windows.
-        queue_field_ids : multiprocessing.managers.AutoProxy[Queue]
-            Queue containing the IDs of fields whose `jd_next_obs_window` value
-            needs to be updated.
         jd : float
             JD of the day for which the observing window is calculated.
         frame : astropy.coordinates.AltAz
@@ -1219,6 +1274,11 @@ class SurveyPlanner:
             initially tested.
         field : Field instance
             The field for which the observing window is calculate.
+        init : bool
+            True, if the field does not have any observing windows calculated
+            yet, which supresses the check that the calculation is not a
+            repetition. Otherwise, this method makes sure that no days are
+            repeated.
         refine : astropy.units.quantity.Quantity
             Time accuracy in seconds at which the observing window is
             calculated.
@@ -1233,21 +1293,18 @@ class SurveyPlanner:
         add_obs_windows() method.
         """
 
-        if field.latest_obs_window_jd > jd:
-            return None
+        # skip if this field was already covered for this JD:
+        if not init and field.jd_next_obs_window > jd:
+            pass
 
-        obs_windows = field.get_obs_window(
-                self.telescope, frame, refine=refine)
+        # get observing windows and add them to queue:
+        else:
+            obs_windows = field.get_obs_window(
+                    self.telescope, frame, refine=refine)
+            queue_obs_windows.put((field.id, obs_windows))
 
-        # add field ID and observing windows to queue:
-        for obs_window in obs_windows:
-            queue_obs_windows.put((field.id, obs_window[0], obs_window[1]))
-
-        # otherwise queue field ID and None:
-        if len(obs_windows) == 0:
-            queue_obs_windows.put((field.id, None, None))
-
-        queue_field_ids.put(field.id)
+        with counter_lock:
+            counter.value += 1
 
     #--------------------------------------------------------------------------
     def iter_observable_fields(
@@ -1607,6 +1664,84 @@ class SurveyPlanner:
             yield fields_id[in_circle]
 
     #--------------------------------------------------------------------------
+    def _add_obs_windows(
+            self, db, fields, init, observatory, date_stop, date_start,
+            batch_write, processes, time_interval_init, time_interval_refine,
+            agreed_to_gaps):
+        # TODO: docstring
+
+        n_fields = len(fields)
+
+        # print out some information:
+        if n_fields and init:
+            print(f'Initial observing windows required for {n_fields} new '\
+                  'fields.')
+        elif n_fields:
+            print(f'Observing windows required for {n_fields} fields.')
+        elif not init:
+            jd_done = db.get_latest_obs_window_jd()
+            date_done = Time(jd_done, format='jd')
+            print('Observing windows for no further fields required. Stored '
+                  f'already at least up to JD {jd_done:.0f}, i.e. '
+                  f'{date_done.iso.split(" ")[0]}.')
+            return None
+        else:
+            return None
+
+        # setup observatory with constraints:
+        self._setup_observatory(observatory)
+
+        # get time range for observing window calculation:
+        if init:
+            jd_start, jd_stop, n_days = self._obs_window_time_range_init(
+                    date_stop, date_start)
+        else:
+            jd_start, jd_stop, n_days, agreed_to_gaps \
+            = self._obs_window_time_range(
+                    db, date_stop, date_start, fields, agreed_to_gaps)
+
+        # add start JD to database for new fields:
+        if init:
+            field_ids = [field.id for field in fields]
+            db.init_obs_window_jd(field_ids, jd_start)
+
+        print(f'Calculate observing windows for {n_days} days..')
+
+        # iterate through days:
+        for i, jd in enumerate(np.arange(jd_start, jd_stop, 1.), start=1):
+            print(f'Day {i} of {n_days}, JD {jd:.0f}')
+
+            # setup time frame:
+            date = Time(jd, format='jd').datetime
+            time_sunset, time_sunrise = \
+                self.telescope.get_sun_set_rise(
+                        date.year, date.month, date.day, self.twilight)
+            frame = self.telescope.get_frame(
+                    time_sunset, time_sunrise, time_interval_init)
+
+            # parallel process fields:
+            manager = Manager()
+            queue_obs_windows = manager.Queue()
+            counter = manager.Value(int, 0)
+            counter_lock = manager.Lock()
+            writer = Process(
+                    target=self._add_obs_windows_to_db,
+                    args=(db, counter, queue_obs_windows, jd+1, n_fields, batch_write))
+            writer.start()
+
+            with Pool(processes=processes) as pool:
+                pool.starmap(
+                        self._find_obs_window_for_field,
+                        zip(repeat(counter), repeat(counter_lock),
+                            repeat(queue_obs_windows), repeat(jd),
+                            repeat(frame), fields, repeat(init),
+                            repeat(time_interval_refine)))
+
+            writer.join()
+
+        return agreed_to_gaps
+
+    #--------------------------------------------------------------------------
     def add_obs_windows(
             self, date_stop, date_start=None, batch_write=10000, processes=1,
             time_interval_init=600, time_interval_refine=60):
@@ -1668,65 +1803,26 @@ class SurveyPlanner:
 
             # get fields that need observing window calculations:
             print('Query fields..')
+            fields_init = db.get_fields(
+                    observatory=observatory_name, init_obs_windows=True)
             fields_tbd = db.get_fields(
                     observatory=observatory_name, needs_obs_windows=jd_stop)
-            fields_tbd = [self._tuple_to_field(field) for field in fields_tbd]
-            n_fields_tbd = len(fields_tbd)
 
-            # if all done, skip to next observatory:
-            if n_fields_tbd == 0:
-                # print earliest JD for which obs windows are needed:
-                jd_done = min([field[7] for field in db.get_fields(
-                        observatory=observatory_name)])
-                date_done = Time(jd_done, format='jd')
-                print('Observing windows already stored for all fields up to '
-                      f'JD {jd_done:.0f}, i.e. {date_done.iso.split(" ")[0]}.')
-                continue
+            with Pool(processes=processes) as pool:
+                    fields_init = pool.map(self._tuple_to_field, fields_init)
+                    fields_tbd = pool.map(self._tuple_to_field, fields_tbd)
 
-            else:
-                print(f'New observing windows required for {n_fields_tbd} '\
-                      'fields.')
+            # calculate observing windows for new fields:
+            agreed_to_gaps = self._add_obs_windows(
+                    db, fields_init, True, observatory_name, date_stop,
+                    date_start, batch_write, processes, time_interval_init,
+                    time_interval_refine, agreed_to_gaps)
 
-            # setup observatory with constraints:
-            self._setup_observatory(observatory_name)
-
-            # get time range for observing window calculation:
-            jd_start, jd_stop, agreed_to_gaps = self._obs_window_time_range(
-                    date_stop, date_start, fields_tbd, agreed_to_gaps)
-            n_days = int(jd_stop - jd_start)
-
-            # iterate through days:
-            for i, jd in enumerate(np.arange(jd_start, jd_stop, 1.), start=1):
-                print(f'Day {i} of {n_days}, JD {jd:.0f}')
-
-
-                # setup time frame:
-                date = Time(jd, format='jd').datetime
-                time_sunset, time_sunrise = \
-                    self.telescope.get_sun_set_rise(
-                            date.year, date.month, date.day, self.twilight)
-                frame = self.telescope.get_frame(
-                        time_sunset, time_sunrise, time_interval_init)
-
-                # parallel process fields:
-                manager = Manager()
-                queue_obs_windows = manager.Queue()
-                queue_field_ids = manager.Queue()
-                writer = Process(
-                        target=self._add_obs_windows_to_db,
-                        args=(db, queue_obs_windows, queue_field_ids, jd+1,
-                              n_fields_tbd, batch_write))
-                writer.start()
-
-                with Pool(processes=processes) as pool:
-                    pool.starmap(
-                            self._find_obs_window_for_field,
-                            zip(repeat(queue_obs_windows),
-                                repeat(queue_field_ids), repeat(jd),
-                                repeat(frame), fields_tbd,
-                                repeat(time_interval_refine)))
-
-                writer.join()
+            # calculate observing windows for fields:
+            agreed_to_gaps = self._add_obs_windows(
+                    db, fields_tbd, False, observatory_name, date_stop,
+                    date_start, batch_write, processes, time_interval_init,
+                    time_interval_refine, agreed_to_gaps)
 
     #--------------------------------------------------------------------------
     def count_neighbors(
