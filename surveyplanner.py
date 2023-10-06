@@ -995,14 +995,14 @@ class SurveyPlanner:
 
         Notes
         -----
-        This method is used by the _add_obs_windows() method.
+        This method is used by the _check_observability() method.
         """
 
         # check input:
         if date_start is None:
             raise ValueError(
                     "New fields require a start date. Set `date_start` when "
-                    "calling add_obs_windows().")
+                    "calling check_observability().")
 
         if date_start >= date_stop:
             raise ValueError("Start date must be earlier than stop date.")
@@ -1051,7 +1051,7 @@ class SurveyPlanner:
 
         Notes
         -----
-        This method is used by the _add_obs_windows() method.
+        This method is used by the _check_observability() method.
         """
 
         # TODO: the following is tricky. Init fields will result in the warning
@@ -1126,13 +1126,13 @@ class SurveyPlanner:
         return jd_start, jd_stop, n_days, agreed_to_gaps
 
     #--------------------------------------------------------------------------
-    def _read_from_queue(
-            self, queue_obs_windows, n):
-        # TODO: update docstring
+    def _read_from_queue(self, db, queue_obs_windows, n):
         """Read results from the queues to be written to the database.
 
         Parameters
         ----------
+        db : db.DBConnectorSQLite
+            Active database connection.
         queue_obs_windows : multiprocessing.managers.AutoProxy[Queue]
             Queue containing the observing windows.
         queue_field_ids : multiprocessing.managers.AutoProxy[Queue]
@@ -1144,9 +1144,16 @@ class SurveyPlanner:
         Returns
         -------
         batch_field_ids : list of int
-            IDs of the fields for updating `jd_next_obs_window` value.
-        batch_obs_windows_ids : list of int
+            IDs of the fields for Observability table entries and updating
+            `jd_next_obs_window` value.
+        batch_dates : list of float
+            Current JD for Observability table entries.
+        batch_status_ids : list of int or str
+            Status IDs for Observability table entries.
+        batch_obs_windows_field_ids : list of int
             IDs of fields corresponding to the observing windows.
+        batch_obs_windows_obs_ids: list of int
+            IDs of the related entries in Observability table.
         batch_obs_windows_start : list of astropy.time.Time instances
             Observing windows start dates and times.
         batch_obs_windows_stop : list of astropy.time.Time instances
@@ -1154,12 +1161,16 @@ class SurveyPlanner:
 
         Notes
         -----
-        This method is used by the _add_obs_windows_to_db() method.
+        This method is used by the _add_observability_to_db() method.
         """
 
-        # gather data:
+        # data storage for Observability table columns:
         batch_field_ids = []
-        batch_obs_windows_ids = []
+        batch_status_ids = []
+
+        # data storage for ObsWindows
+        batch_obs_windows_field_ids = []
+        batch_obs_windows_obs_ids = []
         batch_obs_windows_start = []
         batch_obs_windows_stop = []
 
@@ -1168,23 +1179,35 @@ class SurveyPlanner:
         if n_queued < n:
             n = n_queued
 
+        # get next observability_id:
+        observability_id = db.get_next_observability_id()
+
         for __ in range(n):
             field_id, obs_windows = queue_obs_windows.get()
             batch_field_ids.append(field_id)
 
+            if len(obs_windows):
+                batch_status_ids.append('NULL')
+            else:
+                batch_status_ids.append(1)
+
             for start, stop in obs_windows:
-                batch_obs_windows_ids.append(field_id)
+                batch_obs_windows_field_ids.append(field_id)
+                batch_obs_windows_obs_ids.append(observability_id)
                 batch_obs_windows_start.append(start)
                 batch_obs_windows_stop.append(stop)
 
-        return (batch_field_ids, batch_obs_windows_ids,
-                batch_obs_windows_start, batch_obs_windows_stop)
+            observability_id += 1
+
+        return (batch_field_ids, batch_status_ids, batch_obs_windows_field_ids,
+                batch_obs_windows_obs_ids, batch_obs_windows_start,
+                batch_obs_windows_stop)
 
     #--------------------------------------------------------------------------
-    def _add_obs_windows_to_db(
-            self, db, counter, queue_obs_windows, jd_next, n_tbd, batch_write):
+    def _add_observability_to_db(
+            self, db, counter, queue_obs_windows, jd, n_tbd, batch_write):
         # TODO: update docstring
-        """Write observation windows to database.
+        """Write observability status and observation windows to database.
 
         Parameters
         ----------
@@ -1192,9 +1215,8 @@ class SurveyPlanner:
             Active database connection.
         queue_obs_windows : multiprocessing.managers.AutoProxy[Queue]
             Queue containing the observing windows.
-        jd_next : float
-            JD for the next required observing window calculation that will be
-            written to the database.
+        jd : float
+            JD of the current observing window calculation.
         n_tbd : int
             Number of fields whose calculated observing windows need to be
             written to the database.
@@ -1208,10 +1230,11 @@ class SurveyPlanner:
         Notes
         -----
         This method is run by a separate process started by the
-        add_obs_windows() method.
+        check_observability() method.
         """
 
         done = False
+        jd_next = jd + 1
 
         while not done:
             sleep(1)
@@ -1228,9 +1251,10 @@ class SurveyPlanner:
             if done or n_queued >= batch_write:
                 print('\rProgress: reading from queue..                      ',
                       end='')
-                batch_field_ids, batch_obs_windows_ids, \
+                batch_field_ids, batch_status_ids, \
+                batch_obs_windows_field_ids, batch_obs_windows_obs_ids, \
                 batch_obs_windows_start, batch_obs_windows_stop \
-                = self._read_from_queue(queue_obs_windows, batch_write)
+                = self._read_from_queue(db, queue_obs_windows, batch_write)
                 n_queried = len(batch_field_ids)
                 write = True
 
@@ -1242,10 +1266,17 @@ class SurveyPlanner:
                 print(f'\rProgress: writing {n_queried} entries to database..',
                       end='')
 
+                # add observabilities to database:
+                batch_dates = [jd]*len(batch_field_ids)
+                db.add_observability(
+                        batch_field_ids, batch_dates, batch_status_ids,
+                        active=True)
+
                 # add observing windows to database:
                 db.add_obs_windows(
-                        batch_obs_windows_ids, batch_obs_windows_start,
-                        batch_obs_windows_stop, active=True)
+                        batch_obs_windows_field_ids, batch_obs_windows_obs_ids,
+                        batch_obs_windows_start, batch_obs_windows_stop,
+                        active=True)
 
                 # update Field information in database:
                 db.update_next_obs_window(
@@ -1290,7 +1321,7 @@ class SurveyPlanner:
         Notes
         -----
         This method is run by a pool of workers started by the
-        add_obs_windows() method.
+        check_observability() method.
         """
 
         # skip if this field was already covered for this JD:
@@ -1664,7 +1695,7 @@ class SurveyPlanner:
             yield fields_id[in_circle]
 
     #--------------------------------------------------------------------------
-    def _add_obs_windows(
+    def _check_observability(
             self, db, fields, init, observatory, date_stop, date_start,
             batch_write, processes, time_interval_init, time_interval_refine,
             agreed_to_gaps):
@@ -1725,8 +1756,10 @@ class SurveyPlanner:
             counter = manager.Value(int, 0)
             counter_lock = manager.Lock()
             writer = Process(
-                    target=self._add_obs_windows_to_db,
-                    args=(db, counter, queue_obs_windows, jd+1, n_fields, batch_write))
+                    target=self._add_observability_to_db,
+                    args=(db, counter, queue_obs_windows, jd, n_fields,
+                          batch_write)
+                    )
             writer.start()
 
             with Pool(processes=processes) as pool:
@@ -1742,7 +1775,7 @@ class SurveyPlanner:
         return agreed_to_gaps
 
     #--------------------------------------------------------------------------
-    def add_obs_windows(
+    def check_observability(
             self, date_stop, date_start=None, batch_write=10000, processes=1,
             time_interval_init=600, time_interval_refine=60):
         """Calculate observing windows for all active fields and add them to
@@ -1813,13 +1846,13 @@ class SurveyPlanner:
                     fields_tbd = pool.map(self._tuple_to_field, fields_tbd)
 
             # calculate observing windows for new fields:
-            agreed_to_gaps = self._add_obs_windows(
+            agreed_to_gaps = self._check_observability(
                     db, fields_init, True, observatory_name, date_stop,
                     date_start, batch_write, processes, time_interval_init,
                     time_interval_refine, agreed_to_gaps)
 
             # calculate observing windows for fields:
-            agreed_to_gaps = self._add_obs_windows(
+            agreed_to_gaps = self._check_observability(
                     db, fields_tbd, False, observatory_name, date_stop,
                     date_start, batch_write, processes, time_interval_init,
                     time_interval_refine, agreed_to_gaps)

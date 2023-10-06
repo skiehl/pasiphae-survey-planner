@@ -881,7 +881,7 @@ class DBConnectorSQLite:
                         REFERENCES Observatories (observatory_id),
                     active boolean,
                     jd_first_obs_window float,
-                    jd_next_obs_window float)
+                    jd_next_obs_window float);
                 """
             self._query(connection, query, commit=True)
             print("Table 'Fields' created.")
@@ -894,7 +894,7 @@ class DBConnectorSQLite:
                     lat float,
                     lon float,
                     height float,
-                    utc_offset float)
+                    utc_offset float);
                 """
             self._query(connection, query, commit=True)
             print("Table 'Observatories' created.")
@@ -906,7 +906,7 @@ class DBConnectorSQLite:
                     observatory_id integer
                         REFERENCES Observatories (observatory_id),
                     active bool,
-                    date date)
+                    date date);
                 """
             self._query(connection, query, commit=True)
             print("Table 'ParameterSet' created.")
@@ -915,7 +915,7 @@ class DBConnectorSQLite:
             query = """\
                 CREATE TABLE Constraints(
                     constraint_id integer PRIMARY KEY,
-                    constraint_name char(30))
+                    constraint_name char(30));
                 """
             self._query(connection, query, commit=True)
             print("Table 'Constraints' created.")
@@ -931,7 +931,7 @@ class DBConnectorSQLite:
                     parameter_name_id integer
                         REFERENCES ParameterNames (parameter_name_id),
                     value float,
-                    svalue char(30))
+                    svalue char(30));
                 """
             self._query(connection, query, commit=True)
             print("Table 'Parameters' created.")
@@ -940,10 +940,36 @@ class DBConnectorSQLite:
             query = """\
                 CREATE TABLE ParameterNames(
                     parameter_name_id integer PRIMARY KEY,
-                    parameter_name char(30))
+                    parameter_name char(30));
                 """
             self._query(connection, query, commit=True)
             print("Table 'ParameterNames' created.")
+
+            # create Observability table:
+            query = """\
+                CREATE TABLE Observability(
+                    observability_id integer PRIMARY KEY,
+                    field_id integer
+                        REFERENCES Fields (field_id),
+                    date date,
+                    status_id int
+                        REFERENCES ObservabilityStatus (status_id),
+                    setting_duration float,
+                    active bool);
+                """
+
+            self._query(connection, query, commit=True)
+            print("Table 'Observability' created.")
+
+            # create ObservabilityStatus table:
+            query = """\
+                CREATE TABLE ObservabilityStatus(
+                    status_id integer PRIMARY KEY,
+                    status char(14));
+                """
+
+            self._query(connection, query, commit=True)
+            print("Table 'ObservabilityStatus' created.")
 
             # create ObsWindows table:
             query = """\
@@ -951,10 +977,12 @@ class DBConnectorSQLite:
                     obswindow_id integer PRIMARY KEY,
                     field_id integer
                         REFERENCES Fields (field_id),
+                    observability_id int
+                        REFERENCES Observability (observability_id),
                     date_start date,
                     date_stop date,
                     duration float,
-                    active bool)
+                    active bool);
                 """
             self._query(connection, query, commit=True)
             print("Table 'ObsWindows' created.")
@@ -971,7 +999,7 @@ class DBConnectorSQLite:
                         REFERENCES Filters (filter_id),
                     scheduled bool,
                     done bool,
-                    date date)
+                    date date);
                 """
             self._query(connection, query, commit=True)
             print("Table 'Observations' created.")
@@ -984,7 +1012,7 @@ class DBConnectorSQLite:
                         REFERENCES Fields (field_id),
                     ra float,
                     dec int,
-                    active bool)
+                    active bool);
                 """
             self._query(connection, query, commit=True)
             print("Table 'Guidestars' created.")
@@ -993,7 +1021,7 @@ class DBConnectorSQLite:
             query = """\
                 CREATE TABLE Filters(
                     filter_id integer PRIMARY KEY,
-                    filter char(10))
+                    filter char(10));
                 """
             self._query(connection, query, commit=True)
             print("Table 'Filters' created.")
@@ -1009,10 +1037,23 @@ class DBConnectorSQLite:
                     ('MoonDistance'),
                     ('MoonPolarization'),
                     ('PolyHADecLimit'),
-                    ('SunDistance')
+                    ('SunDistance');
                 """
             self._query(connection, query, commit=True)
             print("Constraints added to table 'Constraints'.")
+
+            # define status:
+            query = """\
+                INSERT INTO ObservabilityStatus (status)
+                VALUES
+                    ('not observable'),
+                    ('rising'),
+                    ('plateauing'),
+                    ('setting'),
+                    ('unknown');
+                """
+            self._query(connection, query, commit=True)
+            print("Statuses added to table 'ObservabilityStatus'.")
 
         return True
 
@@ -1494,13 +1535,56 @@ class DBConnectorSQLite:
         return constraints
 
     #--------------------------------------------------------------------------
-    def add_obs_windows(self, field_ids, dates_start, dates_stop, active=True):
+    def add_observability(
+            self, field_ids, dates, status_ids, active=True):
+        """Add observability for a specific field and date to database.
+
+        Parameters
+        ----------
+        field_ids : int or list of int
+            ID of the field that the observability was calculated for.
+        dates : list of float
+            JD of the observability calculation.
+        status_ids : list of int or str
+            ID of the observability status. Can be 2 for not observable or
+            'NULL' for not determined yet.
+        active : bool, optional
+            If True, the observing windows is added as active, as inactive
+            otherwise. The default is True.
+
+        Returns
+        -------
+        None
+        """
+
+        # prepare data:
+        data = []
+
+        for field_id, date, status_id in zip(field_ids, dates, status_ids):
+            data.append((
+                    field_id, date, status_id, active))
+
+        # add observation windows to database:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO Observability (
+                    field_id, date, status_id, active)
+                VALUES (?, ?, ?, ?);
+                """
+            self._query(connection, query, many=data, commit=True)
+
+    #--------------------------------------------------------------------------
+    def add_obs_windows(
+            self, field_ids, observability_ids, dates_start, dates_stop,
+            active=True):
         """Add observation window for a specific field to database.
 
         Parameters
         ----------
         field_ids : int or list of int
             ID of the field that the observation window is associated with.
+        observability_ids : list of int
+            IDs of the related entries in Observability table.
         dates_start : astropy.time.Time or list of Time-instances
             Start date and time of the observing window.
         dates_stop : astropy.time.Time or list of Time-instances
@@ -1523,18 +1607,20 @@ class DBConnectorSQLite:
         # prepare data:
         data = []
 
-        for field_id, date_start, date_stop in zip(
-                field_ids, dates_start, dates_stop):
+        for field_id, observability_id, date_start, date_stop in zip(
+                field_ids, observability_ids, dates_start, dates_stop):
             duration = (date_stop - date_start).value
             data.append((
-                    field_id, date_start.iso, date_stop.iso, duration, active))
+                    field_id, observability_id, date_start.iso, date_stop.iso,
+                    duration, active))
 
         # add observation windows to database:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 INSERT INTO ObsWindows (
-                    field_id, date_start, date_stop, duration, active)
-                VALUES (?, ?, ?, ?, ?);
+                    field_id, observability_id, date_start, date_stop,
+                    duration, active)
+                VALUES (?, ?, ?, ?, ?, ?);
                 """
             self._query(connection, query, many=data, commit=True)
 
@@ -1600,6 +1686,18 @@ class DBConnectorSQLite:
                 self._query(connection, query, commit=False)
 
             connection.commit()
+
+    #--------------------------------------------------------------------------
+    def get_next_observability_id(self):
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """
+            SELECT MAX(observability_id) FROM Observability
+            """
+            highest_id = self._query(connection, query).fetchall()[0][0]
+            next_id = 1 if highest_id is None else highest_id + 1
+
+        return next_id
 
     #--------------------------------------------------------------------------
     def get_latest_obs_window_jd(self):
