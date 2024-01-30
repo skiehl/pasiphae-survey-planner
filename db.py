@@ -951,7 +951,7 @@ class DBConnectorSQLite:
                     observability_id integer PRIMARY KEY,
                     field_id integer
                         REFERENCES Fields (field_id),
-                    date date,
+                    jd float,
                     status_id int
                         REFERENCES ObservabilityStatus (status_id),
                     setting_duration float,
@@ -1046,11 +1046,11 @@ class DBConnectorSQLite:
             query = """\
                 INSERT INTO ObservabilityStatus (status)
                 VALUES
+                    ('init'),
                     ('not observable'),
                     ('rising'),
                     ('plateauing'),
-                    ('setting'),
-                    ('unknown');
+                    ('setting');
                 """
             self._query(connection, query, commit=True)
             print("Statuses added to table 'ObservabilityStatus'.")
@@ -1143,8 +1143,8 @@ class DBConnectorSQLite:
             Iteratively increasing counter.
         n : int
             Number of observatories stored in the database.
-        telescope : surveyplanner.telescope
-            The telescope with parameters as stored in the database.
+        telescope : dict
+            The telescope parameters as stored in the database.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -1416,7 +1416,8 @@ class DBConnectorSQLite:
             query = """\
                     SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
                         f.tilt, o.name observatory, f.active,
-                        f.jd_next_obs_window, p.nobs_done, p.nobs_tot,
+                        f.jd_first_obs_window, f.jd_next_obs_window,
+                        p.nobs_done, p.nobs_tot,
                         p.nobs_tot - p.nobs_done AS nobs_pending
                     FROM Fields AS f
                     LEFT JOIN Observatories AS o
@@ -1429,6 +1430,30 @@ class DBConnectorSQLite:
                     ON f.field_id = p.field_id
                     WHERE f.field_id = {0} AND p.field_id = {0};
                     """.format(field_id)
+            result = self._query(connection, query).fetchall()
+
+        return result
+
+    #--------------------------------------------------------------------------
+    def get_fields_missing_status(self):
+        """Query fields from the database that have missing or unknown
+        observability status in some entries.
+
+        Returns
+        -------
+        result : list of tuples
+            Each tuple contains the field ID and the corresponding MJD for
+            which an observability is stored with unset or unknown status.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """
+            SELECT field_id, jd
+            FROM Observability
+            WHERE (
+            	status_id = 1
+            	AND active = 1)
+            """
             result = self._query(connection, query).fetchall()
 
         return result
@@ -1536,7 +1561,7 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def add_observability(
-            self, field_ids, dates, status_ids, active=True):
+            self, field_ids, dates, status, active=True):
         """Add observability for a specific field and date to database.
 
         Parameters
@@ -1545,9 +1570,8 @@ class DBConnectorSQLite:
             ID of the field that the observability was calculated for.
         dates : list of float
             JD of the observability calculation.
-        status_ids : list of int or str
-            ID of the observability status. Can be 2 for not observable or
-            'NULL' for not determined yet.
+        status : list of str
+            Observability status. Each item can be 'init' or 'not observable'.
         active : bool, optional
             If True, the observing windows is added as active, as inactive
             otherwise. The default is True.
@@ -1557,18 +1581,28 @@ class DBConnectorSQLite:
         None
         """
 
+        # status to status ID conversion:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT *
+                FROM ObservabilityStatus;
+                """
+            results = self._query(connection, query).fetchall()
+
+        status_to_id = {k: i for i, k in results}
+
         # prepare data:
         data = []
 
-        for field_id, date, status_id in zip(field_ids, dates, status_ids):
+        for field_id, date, stat in zip(field_ids, dates, status):
             data.append((
-                    field_id, date, status_id, active))
+                    field_id, date, status_to_id[stat], active))
 
         # add observation windows to database:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 INSERT INTO Observability (
-                    field_id, date, status_id, active)
+                    field_id, jd, status_id, active)
                 VALUES (?, ?, ?, ?);
                 """
             self._query(connection, query, many=data, commit=True)
@@ -1576,7 +1610,7 @@ class DBConnectorSQLite:
     #--------------------------------------------------------------------------
     def add_obs_windows(
             self, field_ids, observability_ids, dates_start, dates_stop,
-            active=True):
+            duration, active=True):
         """Add observation window for a specific field to database.
 
         Parameters
@@ -1589,6 +1623,8 @@ class DBConnectorSQLite:
             Start date and time of the observing window.
         dates_stop : astropy.time.Time or list of Time-instances
             Stop date and time of the observing window.
+        duration : astropy.time.TimeDelta
+            Duration of the observing window in days.
         active : bool, optional
             If True, the observing windows is added as active, as inactive
             otherwise. The default is True.
@@ -1607,12 +1643,12 @@ class DBConnectorSQLite:
         # prepare data:
         data = []
 
-        for field_id, observability_id, date_start, date_stop in zip(
-                field_ids, observability_ids, dates_start, dates_stop):
-            duration = (date_stop - date_start).value
+        for field_id, observability_id, date_start, date_stop, dur in zip(
+                field_ids, observability_ids, dates_start, dates_stop,
+                duration):
             data.append((
                     field_id, observability_id, date_start.iso, date_stop.iso,
-                    duration, active))
+                    dur.value, active))
 
         # add observation windows to database:
         with SQLiteConnection(self.db_file) as connection:
@@ -1654,6 +1690,51 @@ class DBConnectorSQLite:
                     SET jd_next_obs_window='{0}'
                     WHERE field_id={1};
                     """.format(jd, field_id)
+                self._query(connection, query, commit=False)
+
+            connection.commit()
+
+    #--------------------------------------------------------------------------
+    def update_observability_status(
+            self, observability_ids, status_ids, setting_in):
+        """Update observability status.
+
+        Parameters
+        ----------
+        observability_ids : list of int
+            Observability IDs where database needs to be updated.
+        status_ids : list of int
+            Status IDs to set in the database.
+        setting_in : list of float
+            Durations in days until which a field will set.
+
+        Returns
+        -------
+        None
+        """
+
+        # check input:
+        if isinstance(observability_ids, int):
+            observability_ids = [observability_ids]
+            status_ids = [status_ids]
+            setting_in = [setting_in]
+
+        with SQLiteConnection(self.db_file) as connection:
+            # iterate though entries:
+            for observability_id, status_id, setting in zip(
+                    observability_ids, status_ids, setting_in):
+                if setting is None:
+                    query = """\
+                        UPDATE Observability
+                        SET status_id={0}
+                        WHERE observability_id={1};
+                        """.format(status_id, observability_id)
+                else:
+                    query = """\
+                        UPDATE Observability
+                        SET status_id={0}, setting_duration={1}
+                        WHERE observability_id={2};
+                        """.format(status_id, setting, observability_id)
                 self._query(connection, query, commit=False)
 
             connection.commit()
@@ -1779,7 +1860,7 @@ class DBConnectorSQLite:
         return obs_windows
 
     #--------------------------------------------------------------------------
-    def get_obs_window_durations(self, field_id, date_start, date_stop):
+    def get_obs_window_durations(self, field_id, jd_start, jd_stop):
         """Query the durations of observing window from the database for a
         specified field between a start and a stop date.
 
@@ -1787,27 +1868,58 @@ class DBConnectorSQLite:
         ----------
         field_id : int
             ID of the field whose observing windows are queried.
-        date_start : astropy.time.Time
-            Query observing windows later than this time.
-        date_stop : astropy.time.Time
-            Query observing windows earlier than this time.
+        jd_start : float
+            Query observabilities equal to or later than this time.
+        jd_stop : float
+            Query observabilities equal to or earlier than this time.
 
         Returns
         -------
-        durations : list
-            The durations of the queried observing windows in days.
+        results : list of tuples
+            Each tuple consists of the ID of the observability, the
+            corresponding MJD, and the duration of the corresponding observing
+            window.
         """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
-            SELECT duration FROM ObsWindows
-            WHERE (field_id={0} AND
-                   date_start>'{1}' AND
-                   date_stop<'{2}')
-            """.format(field_id, date_start.iso, date_stop.iso)
-            durations = self._query(connection, query).fetchall()
+            SELECT a.observability_id, a.jd, b.status, a.duration
+            FROM (
+                SELECT o.observability_id, o.jd, o.status_id, ow.duration
+                FROM Observability o
+                LEFT JOIN ObsWindows ow
+                ON o.observability_id = ow.observability_id
+                WHERE (
+                	o.field_id = {0}
+                	AND o.jd >= {1}
+                	AND o.jd <= {2}
+                	AND o.active = 1)
+                ) AS a
+            LEFT JOIN ObservabilityStatus b
+            ON a.status_id = b.status_id
+            """.format(field_id, jd_start, jd_stop)
+            results = self._query(connection, query).fetchall()
 
-        return durations
+        return results
+
+    #--------------------------------------------------------------------------
+    def get_status(self):
+        """Get status ID and corresponding status.
+
+        Returns
+        -------
+        results : list of tuples
+            Each entry contains an ID and its corresponding status string.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT status_id, status
+                FROM ObservabilityStatus;
+                """
+            results = self._query(connection, query).fetchall()
+
+        return results
 
     #--------------------------------------------------------------------------
     def get_filter_id(self, filter_name):

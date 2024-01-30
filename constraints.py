@@ -4,7 +4,7 @@
 """
 
 from abc import ABCMeta, abstractmethod
-from astropy.coordinates import AltAz, get_sun, get_moon
+from astropy.coordinates import AltAz, get_body
 import astropy.units as u
 import numpy as np
 from textwrap import dedent
@@ -627,13 +627,14 @@ class MoonDistance(Constraint):
                 moon_altaz = self.moon_altaz
             # otherwise calculate new Moon positions:
             else:
-                moon_altaz = get_moon(frame.obstime).transform_to(frame)
+                moon_altaz = \
+                        get_body('moon', frame.obstime).transform_to(frame)
                 self.moon_altaz = moon_altaz
                 self.last_frame = frame
 
         # ignore saved frame:
         else:
-            moon_altaz = get_moon(frame.obstime).transform_to(frame)
+            moon_altaz = get_body('moon', frame.obstime).transform_to(frame)
 
         if sel is not None:
             frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
@@ -741,13 +742,14 @@ class MoonPolarization(Constraint):
                 moon_altaz = self.moon_altaz
             # otherwise calculate new Moon positions:
             else:
-                moon_altaz = get_moon(frame.obstime).transform_to(frame)
+                moon_altaz = \
+                        get_body('moon', frame.obstime).transform_to(frame)
                 self.moon_altaz = moon_altaz
                 self.last_frame = frame
 
         # ignore saved frame:
         else:
-            moon_altaz = get_moon(frame.obstime).transform_to(frame)
+            moon_altaz = get_body('moon', frame.obstime).transform_to(frame)
 
         if sel is not None:
             frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
@@ -1075,20 +1077,20 @@ class SunDistance(Constraint):
                 sun_altaz = self.sun_altaz
             # otherwise calculate new Moon positions:
             else:
-                sun_altaz = get_sun(frame.obstime).transform_to(frame)
+                sun_altaz = get_body('sun', frame.obstime).transform_to(frame)
                 self.sun_altaz = sun_altaz
                 self.last_frame = frame
 
         # ignore saved frame:
         else:
-            sun_altaz = get_sun(frame.obstime).transform_to(frame)
+            sun_altaz = get_body('sun', frame.obstime).transform_to(frame)
 
         if sel is not None:
             frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
             sun_altaz = sun_altaz[sel]
 
         source_altaz = source_coord.transform_to(frame)
-        sun_altaz = get_sun(frame.obstime).transform_to(frame)
+        sun_altaz = get_body('sun', frame.obstime).transform_to(frame)
         separation = source_altaz.separation(sun_altaz)
         observable = separation > self.limit
 

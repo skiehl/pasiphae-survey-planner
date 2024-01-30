@@ -18,8 +18,6 @@ __status__ = "Production"
 # FUNCTIONS
 #==============================================================================
 
-
-#--------------------------------------------------------------------------
 def cart_to_sphere(x, y, z):
     """Transform cartesian to spherical coordinates.
 
@@ -48,7 +46,8 @@ def cart_to_sphere(x, y, z):
 
     return ra, dec
 
-#--------------------------------------------------------------------------
+#==============================================================================
+
 def sphere_to_cart(ra, dec):
     """Transform spherical to cartesian coordinates.
 
@@ -76,7 +75,8 @@ def sphere_to_cart(ra, dec):
 
     return x, y, z
 
-#--------------------------------------------------------------------------
+#==============================================================================
+
 def rot_tilt(x, y, z, tilt):
     """Rotate around x-axis by tilt angle.
 
@@ -107,7 +107,8 @@ def rot_tilt(x, y, z, tilt):
 
     return x_rot, y_rot, z_rot
 
-#--------------------------------------------------------------------------
+#==============================================================================
+
 def rot_dec(x, y, z, dec):
     """Rotate around y-axis by declination angle.
 
@@ -139,7 +140,8 @@ def rot_dec(x, y, z, dec):
 
     return x_rot, y_rot, z_rot
 
-#--------------------------------------------------------------------------
+#==============================================================================
+
 def rot_ra(x, y, z, ra):
     """Rotate around z-axis by right ascension angle.
 
@@ -170,7 +172,8 @@ def rot_ra(x, y, z, ra):
 
     return x_rot, y_rot, z_rot
 
-#------------------------------------------------------------------------------
+#==============================================================================
+
 def za_to_airmass(za, conversion="secz"):
     """Convert zenith angle to airmass.
 
@@ -243,7 +246,8 @@ def za_to_airmass(za, conversion="secz"):
 
     return airmass
 
-#------------------------------------------------------------------------------
+#==============================================================================
+
 def alt_to_airmass(alt, conversion="secz"):
     """Convert altitude to airmass.
 
@@ -277,5 +281,39 @@ def alt_to_airmass(alt, conversion="secz"):
     airmass = za_to_airmass(za, conversion=conversion)
 
     return airmass
+
+#==============================================================================
+
+def true_blocks(values):
+    """Find blocks of successive True's.
+
+    Parameters
+    ----------
+    values : nump.ndarray
+        Boolean-type 1dim-array.
+
+    Returns
+    -------
+    list
+        Each element corresponds to one block of True's. The element is a
+        list of two integers, the first marking the first index of the
+        block, the second marking the last True entry of the block.
+    """
+
+    i = 0
+    periods = []
+
+    # iterate through array:
+    while i < values.size-1:
+        if ~np.any(values[i:]):
+            break
+        j = np.argmax(values[i:]) + i
+        k = np.argmax(~values[j:]) + j
+        if j == k and j != values.size-1:
+            k = values.size
+        periods.append((j,k-1))
+        i = k
+
+    return periods
 
 #==============================================================================
