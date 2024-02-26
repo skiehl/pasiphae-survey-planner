@@ -148,7 +148,7 @@ class Field:
 
     #--------------------------------------------------------------------------
     def get_obs_window(
-            self, telescope, frame, time_sunrise, refine=0*u.second):
+            self, telescope, frame, time_sunrise, refine):
         """Calculate time windows when the field is observable.
 
         Parameters
@@ -160,11 +160,12 @@ class Field:
             initially tested.
         time_sunrise : astropy.time.Time
             Date and time of sunrise.
-        refine : astropy.units.Quantity, optional
-            Must be a time unit. If given, the precision of the observable time
-            window is refined to this value. I.e. if the interval given in
-            'frame' is 10 minutes and refine=60*u.second the window limits will
-            be accurate to a minute. The default is 0*u.second.
+        refine : astropy.time.TimeDelta
+            Time accuracy at which the observing window is calculated. The
+            precision of the observable time window is refined to this value.
+            I.e. if the interval given in 'frame' is 10 minutes and refine
+            is a TimeDelta corresponding to 1 minute, the window limits will
+            be accurate to a minute.
 
         Returns
         -------
@@ -191,12 +192,14 @@ class Field:
 
         # increase precision for actual observing windows:
         if refine.value:
-            time_interval = frame.obstime[1] - frame.obstime[0]
+            time_interval = np.diff(frame.obstime.jd).max() * u.d
 
             # iterate through time windows:
             for t_start, t_stop in temp_obs_windows:
                 # keep start time:
-                if t_start == frame.obstime[0]:
+                if np.isclose(
+                        t_start.jd, frame.obstime[0].jd,
+                        atol = 1e-8, rtol = 1e-13):
                     pass
                 # higher precision for start time:
                 else:
@@ -208,19 +211,21 @@ class Field:
                     k = np.argmax(observable)
                     t_start = frame_temp.obstime[k]
 
+                # keep stop time:
+                if np.isclose(
+                        t_stop.jd, frame.obstime[-1].jd,
+                        atol = 1e-8, rtol = 1e-13):
+                    pass
                 # higher precision for stop time:
-                if t_stop == frame.obstime[-1]:
-                    t_stop_new = time_sunrise
                 else:
                     t_stop_new = t_stop  + time_interval
-
-                frame_temp = telescope.get_frame(
-                        t_stop, t_stop_new, refine)
-                observable = telescope.constraints.get(
-                        self.center_coord, frame_temp, check_frame=False)
-                k = (frame_temp.obstime.value.size - 1
-                        - np.argmax(observable[::-1]))
-                t_stop = frame_temp.obstime[k]
+                    frame_temp = telescope.get_frame(
+                            t_stop, t_stop_new, refine)
+                    observable = telescope.constraints.get(
+                            self.center_coord, frame_temp, check_frame=False)
+                    k = (frame_temp.obstime.value.size - 1
+                            - np.argmax(observable[::-1]))
+                    t_stop = frame_temp.obstime[k]
 
                 if t_start != t_stop:
                     obs_windows.append((t_start, t_stop))
@@ -524,7 +529,7 @@ class Telescope:
         return time_sunset, time_sunrise
 
     #--------------------------------------------------------------------------
-    def get_frame(self, time_start, time_stop, time_interval):
+    def get_frame(self, time_start, time_stop, time_interval, round_up=False):
         """Create an AltAz frame for specified dates.
 
         Parameters
@@ -533,8 +538,12 @@ class Telescope:
             The start date for the frame.
         time_stop : astropy.time.Time
             The stop date for the frame.
-        time_interval : astropy.units.Quantity
-            The time interval in minutes.
+        time_interval : astropy.time.TimeDelta
+            The sampling time interval.
+        round_up : bool, optional
+            If True, the start time is rounded up according to the given time
+            interval. Otherwise, the input start time is used. The default is
+            True.
 
         Returns
         -------
@@ -542,9 +551,25 @@ class Telescope:
             The AltAz frame for specified dates.
         """
 
-        duration = (time_stop - time_start).to_value(time_interval.unit)
-        time = time_start + np.arange(0, duration, time_interval.value) \
-                * time_interval.unit
+        # time offset of start time from next even time grid point at time
+        # interval accuracy:
+        dt0 = -np.mod(time_start.jd, time_interval.value) + time_interval.value
+
+        # time offset of stop time from previous even time grid point at time
+        # interval accuracy:
+        dt1 = np.mod(time_stop.jd, time_interval.value)
+
+        # create time steps:
+        duration = time_stop.jd - time_start.jd - dt0
+        dt = np.arange(0, duration, time_interval.value)
+
+        if np.isclose(dt1, 0):
+            dt = np.r_[0, dt+dt0]
+        else:
+            dt = np.r_[0, dt+dt0, dt[-1]+dt0+dt1]
+
+        # create time and frame:
+        time = time_start + dt * u.d
         frame = AltAz(obstime=time, location=self.loc)
 
         return frame
@@ -905,29 +930,44 @@ class SurveyPlanner:
         # identify blocks with unknown status:
         sel_unk = durations['status'] == 'unknown'
 
-        # iterate through these blocks:
-        for i0, i1 in true_blocks(sel_unk):
+        # iterate through these blocks in reverse order:
+        for i0, i1 in true_blocks(sel_unk)[::-1]:
 
             # skip blocks at the end:
             if i1 == durations.shape[0] - 1:
                 continue
 
-            # otherwise, update status:
-            status = durations['status'][i1+1]
-            durations.loc[i0:i1, 'status'] = status
-            durations.loc[i0:i1, 'update'] = True
+            # otherwise, update status based on next status that is not
+            # 'not observable':
+            for j in range(1, 5):
+                # try to get next status, break if no more are available:
+                try:
+                    status = durations['status'][i1+j]
+                except KeyError:
+                    break
 
-            # extrapolate setting duration, if needed:
-            if status == 'setting':
-                setting_in = durations['setting_in'][i1+1]
-                setting_in += np.arange(i1 - i0 + 1, 0, -1)
-                durations.loc[i0:i1, 'setting_in'] = setting_in
+                # if status is 'not observable', go to next status:
+                if status == 'not observable':
+                    continue
 
+                # update status:
+                if status != 'unknown':
+                    durations.loc[i0:i1, 'status'] = status
+                    durations.loc[i0:i1, 'update'] = True
 
+                # extrapolate setting duration, if needed:
+                if status == 'setting':
+                    setting_in = durations['setting_in'][i1+j] + j - 1
+                    setting_in += np.arange(i1 - i0 + 1, 0, -1)
+                    durations.loc[i0:i1, 'setting_in'] = setting_in
 
+                break
 
-
-
+            # all next statuses are 'not observable', set to 'setting':
+            else:
+                durations.loc[i0:i1, 'status'] = 'setting'
+                durations.loc[i0:i1, 'update'] = True
+                durations.loc[i0:i1, 'setting_in'] = np.arange(i1 - i0, -1, -1)
 
     #--------------------------------------------------------------------------
     def _obs_window_time_range_init(self, date_stop, date_start):
@@ -1102,9 +1142,9 @@ class SurveyPlanner:
             needs to be updated.
         n : int
             Number of entries to read from the queue.
-        duration_limit : astropy.units.quantity.Quantity
-            Limit (in any astropy.units time unit) on the observing window
-            duration above which a field is considered observable.
+        duration_limit : astropy.time.TimeDelta
+            Limit on the observing window duration above which a field is
+            considered observable.
 
         Returns
         -------
@@ -1158,7 +1198,7 @@ class SurveyPlanner:
             for start, stop in obs_windows:
                 duration = (stop - start)
 
-                if duration > duration_limit:
+                if duration >= duration_limit:
                     batch_obs_windows_field_ids.append(field_id)
                     batch_obs_windows_obs_ids.append(observability_id)
                     batch_obs_windows_start.append(start)
@@ -1193,9 +1233,9 @@ class SurveyPlanner:
             Queue containing the observing windows.
         jd : float
             JD of the current observing window calculation.
-        duration_limit : astropy.units.quantity.Quantity
-            Limit (in any astropy.units time unit) on the observing window
-            duration above which a field is considered observable.
+        duration_limit : astropy.time.TimeDelta
+            Limit on the observing window duration above which a field is
+            considered observable.
         n_tbd : int
             Number of fields whose calculated observing windows need to be
             written to the database.
@@ -1295,9 +1335,8 @@ class SurveyPlanner:
             yet, which supresses the check that the calculation is not a
             repetition. Otherwise, this method makes sure that no days are
             repeated.
-        refine : astropy.units.quantity.Quantity
-            Time accuracy in seconds at which the observing window is
-            calculated.
+        refine : astropy.time.TimeDelta
+            Time accuracy at which the observing window is calculated.
 
         Returns
         -------
@@ -1344,29 +1383,27 @@ class SurveyPlanner:
             The telescope parameters as stored in the database.
         date_stop : astropy.time.Time
             The date until which observing windows should be calculated.
-        date_start : astropy.time.Time, optional
+        date_start : astropy.time.Time
             The date from which on observing windows should be calculated. If
             this is later than the latest entries in the database, this will
             lead to gaps in the observing window calculation. The user is
             warned about this. It is safer to use this option only for the
-            initial run and not afterwards. The default is None.
-        duration_limit : astropy.units.quantity.Quantity, optional
-            Limit (in any astropy.units time unit) on the observing window
-            duration above which a field is considered observable. The default
-            is 1*u.min.
-        batch_write : int, optional
+            initial run and not afterwards.
+        duration_limit : astropy.time.TimeDelta
+            Limit on the observing window duration above which a field is
+            considered observable.
+        batch_write : int
             Observing window are temporarily saved and then written to the
-            database in batches of this size. The default is 10000.
-        processes : int, optional
+            database in batches of this size.
+        processes : int
             Number of processes that run the obsering window calcuations for
-            different fields in parallel. The default is 1.
-        time_interval_init : float, optional
-            Time accuracy in seconds at which the observing windows are
-            initially calculated. The accuracy can be refined with the next
-            parameter. The default is 300.
-        time_interval_refine : float, optional
-            Time accuracy in seconds at which the observing windows are
-            calculated after the initial coarse search. The default is 5.
+            different fields in parallel.
+        time_interval_init : astropy.time.TimeDelta
+            Time accuracy at which the observing windows are initially
+            calculated. The accuracy can be refined with the next parameter.
+        time_interval_refine : astropy.time.TimeDelta
+            Time accuracy at which the observing windows are calculated after
+            the initial coarse search.
         agreed_to_gaps : bool or None
             Whether the user agreed to time gaps in the observing window
             calculation or not.
@@ -1432,7 +1469,7 @@ class SurveyPlanner:
                 self.telescope.get_sun_set_rise(
                         date.year, date.month, date.day, self.twilight)
             frame = self.telescope.get_frame(
-                    time_sunset, time_sunrise, time_interval_init)
+                    time_sunset, time_sunrise, time_interval_init, round_up=False) # TODO
 
             # parallel process fields:
             manager = Manager()
@@ -1662,7 +1699,8 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _get_status(
-            self, jd, jds, durations, status_threshold=0.001, mask_outl=None):
+            self, jd, jds, durations, time_interval, status_threshold=6,
+            mask_outl=None):
         """Status based on linear ordinary least square regression with
         exclusion of outliers.
 
@@ -1674,11 +1712,13 @@ class SurveyPlanner:
             JDs of the observing windows.
         durations : array-like
             Durations of the observing windows for each JD.
+        time_interval : astropy.time.TimeDelta
+            Time accuracy at which the observing windows were calculated. The
+            status is considered "plateauing" if the standard deviation
+            of the durations is smaller than this time interval times the
+            status_threshold.
         status_threshold : float, optional
-            Threshold for distinguishing plateauing from rising or setting. If
-            the OLS p-value is larger than this threshold, the status is
-            considered "plateauing"; otherwise "rising" or "setting" depending
-            on the slope. The default is 0.001.
+            Scaling factor. See description of time_interval. The default is 6.
         mask_outl : numpy.ndarray (dtype: bool) or None, optional
             If given, Trues mark outliers that are removed from the OLS. The
             default is None.
@@ -1704,24 +1744,23 @@ class SurveyPlanner:
             x = x[~mask_outl]
             y = y[~mask_outl]
 
-        # linear regression:
-        x = add_constant(x)
-        model = OLS(y, x).fit()
-        pval = model.pvalues[1]
-        slope = model.params[1]
-        intercept = model.params[0]
-
         # get status:
-        if pval >= status_threshold:
+        if y.std() <= time_interval.value * status_threshold:
             status = 'plateauing'
             setting_in = np.nan
 
-        elif slope > 0:
+        elif np.median(np.diff(y)) > 0:
             status = 'rising'
             setting_in = np.nan
 
         else:
             status = 'setting'
+
+            # linear regression for setting duration:
+            x = add_constant(x)
+            model = OLS(y, x).fit()
+            slope = model.params[1]
+            intercept = model.params[0]
             setting_in = -intercept / slope - jd
 
         return status, setting_in
@@ -1730,7 +1769,7 @@ class SurveyPlanner:
     def _update_status_for_field(
             self, counter, counter_lock, queue_status, db, field_id, jd_before,
             jd_after, days_before, days_after, outlier_threshold,
-            status_threshold):
+            status_threshold, time_interval):
         """Determine the observability status for a specific field for each
         day, for which the status is not yet known, and store it in the
         database.
@@ -1768,6 +1807,8 @@ class SurveyPlanner:
             the OLS p-value is larger than this threshold, the status is
             considered "plateauing"; otherwise "rising" or "setting" depending
             on the slope.
+        time_interval : astropy.time.TimeDelta
+            Time accuracy at which the observing windows were calculated.
 
         Returns
         -------
@@ -1787,9 +1828,10 @@ class SurveyPlanner:
             jd = durations.iloc[i]['jd']
             jd_before = jd - days_before
             jd_after = jd + days_after
-            sel_time = np.logical_and(
+            sel_time = np.logical_and.reduce([
                     durations['jd'] >= jd_before,
-                    durations['jd'] <= jd_after)
+                    durations['jd'] <= jd_after,
+                    durations['status'] != 'not observable'])
 
             # not enough observing windows before or after:
             if (durations.loc[sel_time, 'jd'].iloc[0] != jd_before or
@@ -1802,19 +1844,18 @@ class SurveyPlanner:
                 outliers = self._detect_outliers(
                         durations.loc[sel_time, 'jd'],
                         durations.loc[sel_time, 'duration'],
-                        outlier_threshold=outlier_threshold)                                                  # DEBUG
+                        outlier_threshold=outlier_threshold)
                 status, setting_in = self._get_status(
                         jd, durations.loc[sel_time, 'jd'],
-                        durations.loc[sel_time, 'duration'],
-                        status_threshold=status_threshold,
-                        mask_outl=outliers)
+                        durations.loc[sel_time, 'duration'], time_interval,
+                        status_threshold=status_threshold, mask_outl=outliers)
                 durations.at[i, 'status'] = status
                 durations.at[i, 'update'] = True
 
                 if status == 'setting':
                     durations.at[i, 'setting_in'] = setting_in
 
-                self._update_unknown_status(durations)
+        self._update_unknown_status(durations)
 
         # add to queue:
         sel = durations['update']
@@ -1830,7 +1871,7 @@ class SurveyPlanner:
     #--------------------------------------------------------------------------
     def _add_status(
             self, db, days_before, days_after, outlier_threshold,
-            status_threshold, batch_write=10000, processes=1):
+            status_threshold, time_interval, batch_write=10000, processes=1):
         """Determine the observability status for each field for each day and
         save it in the database.
 
@@ -1855,6 +1896,8 @@ class SurveyPlanner:
             the OLS p-value is larger than this threshold, the status is
             considered "plateauing"; otherwise "rising" or "setting" depending
             on the slope.
+        time_interval : astropy.time.TimeDelta
+            Time accuracy at which the observing windows were calculated.
         batch_write : int, optional
             Observing window are temporarily saved and then written to the
             database in batches of this size. The default is 10000.
@@ -1899,7 +1942,8 @@ class SurveyPlanner:
                         repeat(queue_status),
                         repeat(db), field_ids, jds_before, jds_after,
                         repeat(days_before), repeat(days_after),
-                        repeat(outlier_threshold), repeat(status_threshold)))
+                        repeat(outlier_threshold), repeat(status_threshold),
+                        repeat(time_interval)))
 
         writer.join()
 
@@ -2262,10 +2306,10 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def check_observability(
-            self, date_stop, date_start=None, duration_limit=1*u.min,
+            self, date_stop, date_start=None, duration_limit=60,
             batch_write=10000, processes=1, time_interval_init=300,
             time_interval_refine=5, days_before=7, days_after=7,
-            outlier_threshold=0.7, status_threshold=0.001):
+            outlier_threshold=0.7, status_threshold=6):
         """Calculate observing windows for all active fields and add them to
         the database.
 
@@ -2279,23 +2323,30 @@ class SurveyPlanner:
             lead to gaps in the observing window calculation. The user is
             warned about this. It is safer to use this option only for the
             initial run and not afterwards. The default is None.
-        duration_limit : astropy.units.quantity.Quantity, optional
-            Limit (in any astropy.units time unit) on the observing window
-            duration above which a field is considered observable. The default
-            is 1*u.min.
+        duration_limit : float or astropy.units.quantity.Quantity, optional
+            Limit on the observing window duration above which a field is
+            considered observable. If a float is given, it is considered to be
+            in seconds. Otherwise, provide an astropy.units.quantity.Quantity
+            in any time unit, e.g. by multiplying with astropy.units.min. The
+            default is 60.
         batch_write : int, optional
             Observing window are temporarily saved and then written to the
             database in batches of this size. The default is 10000.
         processes : int, optional
             Number of processes that run the obsering window calcuations for
             different fields in parallel. The default is 1.
-        time_interval_init : float, optional
+        time_interval_init : float or Quantity, optional
+            Time accuracy at which the observing windows are initially
+            calculated. The accuracy can be refined with the next parameter.
+            If a float is given, it is considered to be in seconds. Otherwise,
+            provide an astropy.units.quantity.Quantity in any time unit, e.g.
+            by multiplying with astropy.units.min. The default is 300.
+        time_interval_refine : float or Quantity, optional
             Time accuracy in seconds at which the observing windows are
-            initially calculated. The accuracy can be refined with the next
-            parameter. The default is 300.
-        time_interval_refine : float, optional
-            Time accuracy in seconds at which the observing windows are
-            calculated after the initial coarse search. The default is 5.
+            calculated after the initial coarse search. If a float is given, it
+            is considered to be in seconds. Otherwise, provide an
+            astropy.units.quantity.Quantity in any time unit, e.g. by
+            multiplying with astropy.units.min.The default is 5.
         days_before : int, optional
             Determining the field's status requires the analysis of observation
             windows in a time range. This arguments sets how many days before
@@ -2312,7 +2363,12 @@ class SurveyPlanner:
             Threshold for distinguishing plateauing from rising or setting. If
             the OLS p-value is larger than this threshold, the status is
             considered "plateauing"; otherwise "rising" or "setting" depending
-            on the slope. The default is 0.001.
+            on the slope. The default is 6.
+
+        Raises
+        ------
+        ValueError
+            Raised if time_interval_init is smaller than time_interval_refine.
 
         Returns
         -------
@@ -2331,9 +2387,28 @@ class SurveyPlanner:
           of determining and saving the status of observability.
         """
 
+        # converte inputs:
         batch_write = int(batch_write)
-        time_interval_init *= u.second
-        time_interval_refine *= u.second
+
+        if type(duration_limit) in [float, int]:
+            duration_limit = TimeDelta(duration_limit * u.s)
+        else:
+            duration_limit = TimeDelta(duration_limit)
+
+        if type(time_interval_init) in [float, int]:
+            time_interval_init = TimeDelta(time_interval_init * u.s)
+        else:
+            time_interval_init = TimeDelta(time_interval_init)
+
+        if type(time_interval_refine) in [float, int]:
+            time_interval_refine = TimeDelta(time_interval_refine * u.s)
+        else:
+            time_interval_refine = TimeDelta(time_interval_refine)
+
+        if time_interval_refine > time_interval_init:
+            raise ValueError(
+                    "`time_interval_refine` cannot be smaller than "
+                    "`time_interval_init`.")
 
         print('Calculate observing windows until {0}..'.format(
                 date_stop.iso[:10]))
@@ -2374,7 +2449,8 @@ class SurveyPlanner:
         # determine observability status for each field for each day:
         self._add_status(
                 db, days_before, days_after, outlier_threshold,
-                status_threshold, batch_write=batch_write, processes=processes)
+                status_threshold, time_interval_refine,
+                batch_write=batch_write, processes=processes)
 
     #--------------------------------------------------------------------------
     def count_neighbors(

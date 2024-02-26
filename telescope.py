@@ -372,7 +372,7 @@ class Telescope(object, metaclass=ABCMeta):
 
         self._print(verbose, 'Current time:    {0:s}'.format(
                 self.time.strftime('%Y-%m-%d %H:%M:%S')))
-        time = self.time + np.arange(0., 48., 0.1) * u.h
+        time = self.time + np.arange(0., 48., 0.01) * u.h
         frame = AltAz(obstime=time, location=self.loc)
         sun = get_sun(time).transform_to(frame)
         sun_alt = sun.alt
