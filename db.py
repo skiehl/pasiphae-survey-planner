@@ -147,7 +147,8 @@ class DBConnectorSQLite:
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT observatory_id FROM Observatories
+                SELECT observatory_id
+                FROM Observatories
                 WHERE name = '{0}'
                 """.format(name)
             result = self._query(connection, query).fetchone()
@@ -191,7 +192,7 @@ class DBConnectorSQLite:
         return parameter_set_id
 
     #--------------------------------------------------------------------------
-    def _inactivate_parameter_set(self, parameter_set_id):
+    def _deactivate_parameter_set(self, parameter_set_id):
         """Set a parameter set to inactive.
 
         Parameters
@@ -208,10 +209,75 @@ class DBConnectorSQLite:
 
             query = """\
                 UPDATE ParameterSets
+                SET active = False, date_deactivated = CURRENT_TIMESTAMP
+                WHERE parameter_set_id = {0}
+                """.format(parameter_set_id)
+            self._query(connection, query, commit=True)
+
+        print(f'Parameter set with ID {parameter_set_id} deactivated.')
+
+    #--------------------------------------------------------------------------
+    def _deactivate_observabilities(self, parameter_set_id):
+        """Set all observabilities to inactive that are associated with a
+        specified parameter set ID.
+
+        Parameters
+        ----------
+        parameter_set_id : int
+            Parameter set ID.
+
+        Returns
+        -------
+        None
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                UPDATE Observability
                 SET active = False
                 WHERE parameter_set_id = {0}
                 """.format(parameter_set_id)
             self._query(connection, query, commit=True)
+            n = self._query(connection, "SELECT CHANGES()").fetchone()[0]
+
+        print(f'{n} corresponding observabilities deactivated.')
+
+    #--------------------------------------------------------------------------
+    def _deactivate_obs_windows(self, parameter_set_id):
+        """Set all observing windows to inactive that are associated with a
+        specified parameter set ID.
+
+        Parameters
+        ----------
+        parameter_set_id : int
+            Parameter set ID.
+
+        Returns
+        -------
+        None
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT observability_id
+                FROM Observability
+                WHERE parameter_set_id = {0}
+                """.format(parameter_set_id)
+            observability_ids = self._query(connection, query).fetchall()
+            observability_ids = [item[0] for item in observability_ids]
+
+            n = 0
+
+            for observability_id in observability_ids:
+                query = """\
+                    UPDATE ObsWindows
+                    SET active = False
+                    WHERE observability_id = {0}
+                    """.format(observability_id)
+                self._query(connection, query)
+                n += self._query(connection, "SELECT CHANGES()").fetchone()[0]
+            connection.commit()
+        print(f'{n} corresponding observing windows deactivated.')
 
     #--------------------------------------------------------------------------
     def _last_insert_id(self, connection):
@@ -256,7 +322,8 @@ class DBConnectorSQLite:
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT constraint_id FROM Constraints
+                SELECT constraint_id
+                FROM Constraints
                 WHERE constraint_name = '{0}'
                 """.format(constraint_name)
             result = self._query(connection, query).fetchone()
@@ -288,7 +355,8 @@ class DBConnectorSQLite:
 
             # check for parameter name:
             query = """\
-                SELECT parameter_name_id FROM ParameterNames
+                SELECT parameter_name_id
+                FROM ParameterNames
                 WHERE parameter_name = '{0}'
                 """.format(parameter_name)
             result = self._query(connection, query).fetchone()
@@ -351,6 +419,50 @@ class DBConnectorSQLite:
             self._query(connection, query, commit=True)
 
     #--------------------------------------------------------------------------
+    def _check_parameter_sets(self, observatory):
+        """Check if an active parameter set exists for specified observatory.
+
+        Parameters
+        ----------
+        observatory : string
+            Observatory name.
+
+        Returns
+        -------
+        add_new : bool
+            True, if a new parameter set should be added. False, otherwise.
+        deactivate_old : bool
+            True, if an existing parameter set should be deactivated. False,
+            otherwise.
+        parameter_set_id : int
+            ID of the parameter set that should be deactivated.
+        """
+
+        # check if active parameter set exists:
+        observatory_id = self._get_observatory_id(observatory)
+        parameter_set_id = self._get_parameter_set_id(observatory_id)
+
+        add_new = False
+        deactivate_old = False
+
+        if parameter_set_id == -1:
+            add_new = True
+        else:
+            response = input(
+                "WARNING: An active parameter set for observatory "
+                f"'{observatory}' exists. If a new set is added the former "
+                "one is marked as inactive. This will deactivate all stored "
+                "observabilities and observing windows based on these "
+                "parameters. They will remain in the database, but will also "
+                "be marked as inactive. Add new parameter set? (y/n) ")
+
+            if response.lower() in ['y', 'yes', 'make it so!']:
+                add_new = True
+                deactivate_old = True
+
+        return add_new, deactivate_old, parameter_set_id
+
+    #--------------------------------------------------------------------------
     def _add_parameter_set(self, observatory):
         """Add a parameter set to the database.
 
@@ -365,31 +477,13 @@ class DBConnectorSQLite:
             ID of the newly added parameter set.
         """
 
-        # check if active parameter set exists:
         observatory_id = self._get_observatory_id(observatory)
-        parameter_set_id = self._get_parameter_set_id(observatory_id)
 
-        if parameter_set_id == -1:
-            active = True
-        else:
-            response = input(
-                f"An active parameter set for observator '{observatory} "
-                "exists. Set former one inactive and new one active? (y/n)")
-
-            if response.lower() in ['y', 'yes', 'make it so!']:
-                active = True
-                self._inactivate_parameter_set(parameter_set_id)
-            else:
-                active = False
-
-        # add parameter set and parameters:
         with SQLiteConnection(self.db_file) as connection:
-
-            # add parameter set:
             query = """\
-                INSERT INTO ParameterSets (observatory_id, active, date)
+                INSERT INTO ParameterSets (observatory_id, active, date_added)
                 VALUES ({0}, {1}, CURRENT_TIMESTAMP)
-                """.format(observatory_id, active)
+                """.format(observatory_id, True)
             self._query(connection, query, commit=True)
             parameter_set_id = self._last_insert_id(connection)
 
@@ -906,10 +1000,11 @@ class DBConnectorSQLite:
                     observatory_id integer
                         REFERENCES Observatories (observatory_id),
                     active bool,
-                    date date);
+                    date_added date,
+                    date_deactivated date);
                 """
             self._query(connection, query, commit=True)
-            print("Table 'ParameterSet' created.")
+            print("Table 'ParameterSets' created.")
 
             # create Constraints table:
             query = """\
@@ -951,6 +1046,8 @@ class DBConnectorSQLite:
                     observability_id integer PRIMARY KEY,
                     field_id integer
                         REFERENCES Fields (field_id),
+                    parameter_set_id integer
+                        REFERENCES ParameterSets (parameter_set_id),
                     jd float,
                     status_id int
                         REFERENCES ObservabilityStatus (status_id),
@@ -1082,7 +1179,8 @@ class DBConnectorSQLite:
         with SQLiteConnection(self.db_file) as connection:
             # check if name exists:
             query = """\
-                SELECT name FROM Observatories
+                SELECT name
+                FROM Observatories
                 WHERE name = '{0}'
                 """.format(name)
             result = self._query(connection, query).fetchall()
@@ -1118,7 +1216,8 @@ class DBConnectorSQLite:
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT * FROM Observatories
+                SELECT *
+                FROM Observatories
                 WHERE name='{0}'
                 """.format(name)
             result = self._query(connection, query).fetchone()
@@ -1149,7 +1248,8 @@ class DBConnectorSQLite:
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT * FROM Observatories
+                SELECT *
+                FROM Observatories
                 """
             results = self._query(connection, query).fetchall()
             n = len(results)
@@ -1478,15 +1578,27 @@ class DBConnectorSQLite:
         None
         """
 
-        # add parameter set:
-        parameter_set_id = self._add_parameter_set(observatory)
+        # check if parameter set exists:
+        add_new, deactivate_old, deactivate_id = self._check_parameter_sets(
+                observatory)
 
-        # add twilight constraint:
-        self._add_twilight(twilight, parameter_set_id)
+        # deactivate former parameter set and related stored items:
+        if deactivate_old:
+            self._deactivate_parameter_set(deactivate_id)
+            self._deactivate_observabilities(deactivate_id)
+            self._deactivate_obs_windows(deactivate_id)
 
-        # add constraints:
-        for constraint in constraints:
-            self._add_constraint(constraint, parameter_set_id)
+        # add new parameter set:
+        if add_new:
+            # add parameter set:
+            parameter_set_id = self._add_parameter_set(observatory)
+
+            # add twilight constraint:
+            self._add_twilight(twilight, parameter_set_id)
+
+            # add constraints:
+            for constraint in constraints:
+                self._add_constraint(constraint, parameter_set_id)
 
     #--------------------------------------------------------------------------
     def get_constraints(self, observatory):
@@ -1505,6 +1617,8 @@ class DBConnectorSQLite:
 
         Returns
         -------
+        parameter_set_id : int
+            Parameter set ID corresponding to the constraints.
         constraints : dict of dict
             Dictionary of the constraints. The keys are the constraint names.
             The values are dictionaries that contain the constraint parameter
@@ -1557,16 +1671,18 @@ class DBConnectorSQLite:
             else:
                 constraints[constraint_name][param_name] = value
 
-        return constraints
+        return parameter_set_id, constraints
 
     #--------------------------------------------------------------------------
     def add_observability(
-            self, field_ids, dates, status, active=True):
+            self, parameter_set_ids, field_ids, dates, status, active=True):
         """Add observability for a specific field and date to database.
 
         Parameters
         ----------
-        field_ids : int or list of int
+        parameter_set_ids : list of int
+            Parameter set ID that the observability calculation is based on.
+        field_ids : list of int
             ID of the field that the observability was calculated for.
         dates : list of float
             JD of the observability calculation.
@@ -1594,16 +1710,17 @@ class DBConnectorSQLite:
         # prepare data:
         data = []
 
-        for field_id, date, stat in zip(field_ids, dates, status):
+        for field_id, par_id, date, stat in zip(
+                field_ids, parameter_set_ids, dates, status):
             data.append((
-                    field_id, date, status_to_id[stat], active))
+                    field_id, par_id, date, status_to_id[stat], active))
 
         # add observation windows to database:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 INSERT INTO Observability (
-                    field_id, jd, status_id, active)
-                VALUES (?, ?, ?, ?);
+                    field_id, parameter_set_id, jd, status_id, active)
+                VALUES (?, ?, ?, ?, ?);
                 """
             self._query(connection, query, many=data, commit=True)
 
@@ -1773,7 +1890,8 @@ class DBConnectorSQLite:
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
-            SELECT MAX(observability_id) FROM Observability
+            SELECT MAX(observability_id)
+            FROM Observability
             """
             highest_id = self._query(connection, query).fetchall()[0][0]
             next_id = 1 if highest_id is None else highest_id + 1
@@ -1785,7 +1903,8 @@ class DBConnectorSQLite:
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
-            SELECT MIN(jd_next_obs_window) FROM Fields
+            SELECT MIN(jd_next_obs_window)
+            FROM Fields
             WHERE active=1
             """
             jd = self._query(connection, query).fetchall()[0][0]
@@ -1816,7 +1935,8 @@ class DBConnectorSQLite:
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
-            SELECT * FROM ObsWindows
+            SELECT *
+            FROM ObsWindows
             WHERE (field_id={0} AND
                    date_start>'{1}' AND
                    date_stop<'{2}')

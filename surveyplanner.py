@@ -613,7 +613,8 @@ class SurveyPlanner:
 
         Returns
         -------
-        None
+        parameter_set_id : int
+            Parameter set ID corresponding to the used constraints.
         """
 
         # connect to database:
@@ -627,12 +628,12 @@ class SurveyPlanner:
 
         # load twilight, but skip loading other constraints:
         if no_constraints:
-            constraints = db.get_constraints(observatory)
+            parameter_set_id, constraints = db.get_constraints(observatory)
             self.twilight = constraints['Twilight']['twilight']
             return None
 
         # read constraints:
-        constraints = db.get_constraints(observatory)
+        parameter_set_id, constraints = db.get_constraints(observatory)
         self.twilight = constraints['Twilight']['twilight']
         del constraints['Twilight']
 
@@ -656,6 +657,8 @@ class SurveyPlanner:
             # evaluate code and add constraint to telescope:
             constraint = eval(text)
             self.telescope.add_constraint(constraint)
+
+        return parameter_set_id
 
     #--------------------------------------------------------------------------
     def _tuple_to_field(self, field_tuple):
@@ -1219,8 +1222,8 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _add_obs_windows_to_db(
-            self, db, counter, queue_obs_windows, jd, duration_limit, n_tbd,
-            batch_write):
+            self, db, counter, queue_obs_windows, jd, parameter_set_id,
+            duration_limit, n_tbd, batch_write):
         """Write observability status and observation windows to database.
 
         Parameters
@@ -1233,6 +1236,8 @@ class SurveyPlanner:
             Queue containing the observing windows.
         jd : float
             JD of the current observing window calculation.
+        parameter_set_id : int
+            Parameter set ID of the used constraints.
         duration_limit : astropy.time.TimeDelta
             Limit on the observing window duration above which a field is
             considered observable.
@@ -1288,9 +1293,11 @@ class SurveyPlanner:
 
                 # add observabilities to database:
                 batch_dates = [jd]*len(batch_field_ids)
+                batch_parameter_set_ids \
+                        = [parameter_set_id]*len(batch_field_ids)
                 db.add_observability(
-                        batch_field_ids, batch_dates, batch_status,
-                        active=True)
+                        batch_parameter_set_ids, batch_field_ids, batch_dates,
+                        batch_status, active=True)
 
                 # add observing windows to database:
                 db.add_obs_windows(
@@ -1441,7 +1448,7 @@ class SurveyPlanner:
             return None
 
         # setup observatory with constraints:
-        self._setup_observatory(observatory)
+        parameter_set_id = self._setup_observatory(observatory)
 
         # get time range for observing window calculation:
         if init:
@@ -1469,7 +1476,8 @@ class SurveyPlanner:
                 self.telescope.get_sun_set_rise(
                         date.year, date.month, date.day, self.twilight)
             frame = self.telescope.get_frame(
-                    time_sunset, time_sunrise, time_interval_init, round_up=False) # TODO
+                    time_sunset, time_sunrise, time_interval_init,
+                    round_up=False)
 
             # parallel process fields:
             manager = Manager()
@@ -1478,8 +1486,8 @@ class SurveyPlanner:
             counter_lock = manager.Lock()
             writer = Process(
                     target=self._add_obs_windows_to_db,
-                    args=(db, counter, queue_obs_windows, jd, duration_limit,
-                          n_fields, batch_write)
+                    args=(db, counter, queue_obs_windows, jd, parameter_set_id,
+                          duration_limit, n_fields, batch_write)
                     )
             writer.start()
 
