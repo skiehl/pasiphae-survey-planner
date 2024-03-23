@@ -274,10 +274,36 @@ class DBConnectorSQLite:
                     SET active = False
                     WHERE observability_id = {0}
                     """.format(observability_id)
-                self._query(connection, query)
+                self._query(connection, query, commit=False)
                 n += self._query(connection, "SELECT CHANGES()").fetchone()[0]
             connection.commit()
         print(f'{n} corresponding observing windows deactivated.')
+
+    #--------------------------------------------------------------------------
+    def _deactivate_time_ranges(self, parameter_set_id):
+        """Set all time ranges to inactive that are associated with a specified
+        parameter set ID.
+
+        Parameters
+        ----------
+        parameter_set_id : int
+            Parameter set ID.
+
+        Returns
+        -------
+        None
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                UPDATE TimeRanges
+                SET active = False
+                WHERE parameter_set_id = {0}
+                """.format(parameter_set_id)
+            self._query(connection, query, commit=True)
+            n = self._query(connection, "SELECT CHANGES()").fetchone()[0]
+
+        print(f'{n} corresponding time ranges deactivated.')
 
     #--------------------------------------------------------------------------
     def _last_insert_id(self, connection):
@@ -938,27 +964,9 @@ class DBConnectorSQLite:
         None
         """
 
-        create = False
-
-        # check if file exists:
-        if os.path.exists(self.db_file):
-            answer = input(
-                'Database file exists. Overwrite (y) or cancel (enter)?')
-
-            if answer.lower() in ['y', 'yes', 'make it so!']:
-                os.system(f'rm {self.db_file}')
-                create = True
-
-        else:
-            create = True
-
         # create file:
-        if create:
-            os.system(f'sqlite3 {self.db_file}')
-            print(f"Database '{self.db_file}' created.")
-        else:
-            print(f"Existing database '{self.db_file}' kept.")
-            return False
+        os.system(f'sqlite3 {self.db_file}')
+        print(f"Database '{self.db_file}' created.")
 
         # create tables:
         with SQLiteConnection(self.db_file) as connection:
@@ -973,9 +981,7 @@ class DBConnectorSQLite:
                     tilt float,
                     observatory_id integer
                         REFERENCES Observatories (observatory_id),
-                    active boolean,
-                    jd_first_obs_window float,
-                    jd_next_obs_window float);
+                    active boolean);
                 """
             self._query(connection, query, commit=True)
             print("Table 'Fields' created.")
@@ -1083,6 +1089,21 @@ class DBConnectorSQLite:
                 """
             self._query(connection, query, commit=True)
             print("Table 'ObsWindows' created.")
+
+            # create TimeRanges table:
+            query = """\
+                CREATE TABLE TimeRanges(
+                    time_range_id integer PRIMARY KEY,
+                    field_id integer
+                        REFERENCES Fields (field_id),
+                    parameter_set_id int
+                        REFERENCES ParameterSets (parameter_set_id),
+                    jd_first float,
+                    jd_next float,
+                    active bool);
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'TimeRanges' created.")
 
             # create Observations table:
             query = """\
@@ -1409,10 +1430,10 @@ class DBConnectorSQLite:
 
         # set query condition for observing window requirement:
         if needs_obs_windows:
-            condition_obswindow = " AND jd_next_obs_window < '{0}'".format(
+            condition_obswindow = " AND jd_next < '{0}'".format(
                     needs_obs_windows)
         elif init_obs_windows:
-            condition_obswindow = " AND jd_next_obs_window IS NULL"
+            condition_obswindow = " AND jd_next IS NULL"
         else:
             condition_obswindow = ""
 
@@ -1420,10 +1441,15 @@ class DBConnectorSQLite:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
-                    f.tilt, o.name observatory, f.active,
-                    f.jd_first_obs_window, f.jd_next_obs_window, p.nobs_tot,
-                    p.nobs_done, p.nobs_tot - p.nobs_done AS nobs_pending
+                    f.tilt, o.name observatory, f.active, t.jd_first,
+                    t.jd_next, p.nobs_tot, p.nobs_done,
+                    p.nobs_tot - p.nobs_done AS nobs_pending
                 FROM Fields AS f
+                LEFT JOIN (
+                	SELECT field_id, jd_first, jd_next
+                	FROM TimeRanges
+                	WHERE active = 1) AS t
+                ON f.field_id = t.field_id
                 LEFT JOIN Observatories AS o
                     ON f.observatory_id = o.observatory_id
                 LEFT JOIN (
@@ -1559,6 +1585,14 @@ class DBConnectorSQLite:
         return result
 
     #--------------------------------------------------------------------------
+    def add_guidestars(self):
+        # TODO
+        # optionally warn if not all fields have a guidestar
+        # optionally warn if guidestars are too far separated from field
+        # warn about repetition
+        raise NotImplementedError
+
+    #--------------------------------------------------------------------------
     def add_constraints(self, observatory, twilight, constraints=()):
         """Add constraints to database.
 
@@ -1587,6 +1621,7 @@ class DBConnectorSQLite:
             self._deactivate_parameter_set(deactivate_id)
             self._deactivate_observabilities(deactivate_id)
             self._deactivate_obs_windows(deactivate_id)
+            self._deactivate_time_ranges(deactivate_id)
 
         # add new parameter set:
         if add_new:
@@ -1778,16 +1813,16 @@ class DBConnectorSQLite:
             self._query(connection, query, many=data, commit=True)
 
     #--------------------------------------------------------------------------
-    def update_next_obs_window(self, field_ids, jds):
-        """Update fields' database entries for the next observing window.
+    def update_time_ranges(self, field_ids, jds):
+        """Update TimeRanges table with new JDs.
 
         Parameters
         ----------
         field_id : int or list of int
             ID of the associated field.
         jd : float or list of floar
-            Julian date of the next day for which the next observing window
-            needs to be calculated for the specified field.
+            Julian date of the next day for which the next observability
+            needs to be calculated for the specified fields.
 
         Returns
         -------
@@ -1797,15 +1832,19 @@ class DBConnectorSQLite:
         # check input:
         if isinstance(field_ids, int):
             field_ids = [field_ids]
-            jds = [jds]
+
+        if type(jds) in [float, int]:
+            jds = [jds]*len(field_ids)
 
         with SQLiteConnection(self.db_file) as connection:
             # iterate though fields:
             for field_id, jd in zip(field_ids, jds):
                 query = """\
-                    UPDATE Fields
-                    SET jd_next_obs_window='{0}'
-                    WHERE field_id={1};
+                    UPDATE TimeRanges
+                    SET jd_next='{0}'
+                    WHERE (
+                        field_id={1}
+                        AND active=1)
                     """.format(jd, field_id)
                 self._query(connection, query, commit=False)
 
@@ -1857,15 +1896,17 @@ class DBConnectorSQLite:
             connection.commit()
 
     #--------------------------------------------------------------------------
-    def init_obs_window_jd(self, field_ids, jd):
+    def init_observability_jd(self, field_ids, parameter_set_id, jd):
         """Set JD of first observing window calculation for new fields.
 
         Parameters
         ----------
         field_ids : list of int
             List of field IDs.
+        parameter_set_id : int
+            Parameter set ID to store with the time range entries.
         jd : float
-            JD of the first observing window calculation for the fields with
+            JD of the first observability calculation for the fields with
             IDs given by the first argument.
 
         Returns
@@ -1873,17 +1914,21 @@ class DBConnectorSQLite:
         None
         """
 
-        with SQLiteConnection(self.db_file) as connection:
-            # iterate though fields:
-            for field_id in field_ids:
-                query = """\
-                    UPDATE Fields
-                    SET jd_first_obs_window='{0}'
-                    WHERE field_id={1};
-                    """.format(jd, field_id)
-                self._query(connection, query, commit=False)
+        # prepare data to write:
+        data = []
 
-            connection.commit()
+        for field_id in field_ids:
+            data.append((field_id, parameter_set_id, jd, True))
+
+        # write to database:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO TimeRanges (
+                    field_id, parameter_set_id, jd_first, active
+                )
+                VALUES (?, ?, ?, ?)
+                """
+            self._query(connection, query, many=data, commit=True)
 
     #--------------------------------------------------------------------------
     def get_next_observability_id(self):
@@ -1899,12 +1944,12 @@ class DBConnectorSQLite:
         return next_id
 
     #--------------------------------------------------------------------------
-    def get_latest_obs_window_jd(self):
+    def get_next_observability_jd(self):
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
-            SELECT MIN(jd_next_obs_window)
-            FROM Fields
+            SELECT MIN(jd_next)
+            FROM TimeRanges
             WHERE active=1
             """
             jd = self._query(connection, query).fetchall()[0][0]
@@ -2122,32 +2167,44 @@ class DBConnectorSQLite:
         return results
 
     #--------------------------------------------------------------------------
-    def add_observations(self, field_id, exposure, repetitions, filter_name):
+    def add_observations(
+            self, exposure, repetitions, filter_name, field_id=None,
+            observatory=None):
         """Add observation to database.
 
         Parameters
         ----------
-        field_id : int
-            ID of the associated field.
-        exposure : float
+        exposure : float or list of float
             Exposure time in seconds.
-        repetitions : int
+        repetitions : int or list of int
             Number of repetitions.
-        filter_name : str
+        filter_name : str or list of str
             Filter name.
+        field_id : int or list of int, optional
+            ID(s) of the associated field(s). If None, the same observation is
+            added to all active fields. The default is None.
+        observatory : str, optional
+            If field_id is None, this argument can be used to add observations
+            only to those fields that are associated to the specified
+            observatory. Otherwise, observations are added to all active
+            fields. The default is None.
 
         Returns
         -------
         None
         """
 
-        # prepare field_ids:
-        if isinstance(field_id, int):
+        # prepare field IDs:
+        if field_id is None:
+            field_id = [field[0] for field in
+                        self.get_fields(observatory=observatory, active=True)]
+        elif isinstance(field_id, int):
             field_id = [field_id]
         elif isinstance(field_id, list):
             pass
         else:
-            raise ValueError("'field_id' needs to be int or list of int.")
+            raise ValueError(
+                    "'field_id' needs to be int, list of int, or None.")
 
         n_fields = len(field_id)
 
@@ -2286,6 +2343,5 @@ class DBConnectorSQLite:
                     field_id, exposure, repetitions, filter_name, date=date)
         else:
             self._set_observed_by_id(observation_id, date=date)
-
 
 #==============================================================================

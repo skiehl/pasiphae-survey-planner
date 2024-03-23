@@ -1011,8 +1011,9 @@ class SurveyPlanner:
         # check input:
         if date_start is None:
             raise ValueError(
-                    "New fields require a start date. Set `date_start` when "
-                    "calling check_observability().")
+                    "A start date is required either due to new fields or "
+                    "changed constraints. Set `date_start` when calling "
+                    "check_observability().")
 
         if date_start >= date_stop:
             raise ValueError("Start date must be earlier than stop date.")
@@ -1064,7 +1065,7 @@ class SurveyPlanner:
         - This method is called by `_add_obs_windows()`.
         """
 
-        jd_done = db.get_latest_obs_window_jd()
+        jd_done = db.get_next_observability_jd()
         date_done = Time(jd_done, format='jd')
         jd_stop = date_stop.jd
 
@@ -1076,12 +1077,12 @@ class SurveyPlanner:
         elif date_start.jd > jd_done:
             date_done_str = date_done.iso.split(' ')[0]
             print('\n! ! WARNING ! !')
-            print(f'Observing windows are stored until JD {jd_done:.1f}, '\
+            print(f'Observabilities are stored until JD {jd_done:.1f}, '\
                   f'i.e. {date_done_str}')
             print(f'The start date is set to JD {date_start.jd:.1f}, i.e. '\
                   f'{date_start.iso.split(" ")[0]}.')
-            print('Observing windows will not be stored for the days '\
-                  'inbetween. This may have severe impacts on the scheduling.')
+            print('Observabilities will not be stored for the days '\
+                  'between. This may have severe impacts on the scheduling.')
 
             # ask user:
             if agreed_to_gaps is None:
@@ -1171,7 +1172,7 @@ class SurveyPlanner:
 
         Notes
         -----
-        - This method is called by `_add_obs_windows_to_db()`.
+        - This method is called by `_add_observabilities_to_db()`.
         """
 
         # data storage for Observability table columns:
@@ -1221,7 +1222,7 @@ class SurveyPlanner:
                 batch_obs_windows_stop, batch_obs_windows_duration)
 
     #--------------------------------------------------------------------------
-    def _add_obs_windows_to_db(
+    def _add_observabilities_to_db(
             self, db, counter, queue_obs_windows, jd, parameter_set_id,
             duration_limit, n_tbd, batch_write):
         """Write observability status and observation windows to database.
@@ -1306,7 +1307,7 @@ class SurveyPlanner:
                         batch_obs_windows_duration, active=True)
 
                 # update Field information in database:
-                db.update_next_obs_window(
+                db.update_time_ranges(
                         batch_field_ids, [jd_next]*len(batch_field_ids))
 
                 n_done += n_queried
@@ -1424,7 +1425,8 @@ class SurveyPlanner:
         Notes
         -----
         - This method is called by `check_observability()`.
-        - This method starts `_add_obs_windows_to_db()` in a separate process.
+        - This method starts `_add_observabilities_to_db()` in a separate
+          process.
         - This method starts `_find_obs_window_for_field()` in a pool of
           processes.
         """
@@ -1438,7 +1440,7 @@ class SurveyPlanner:
         elif n_fields:
             print(f'Observing windows required for {n_fields} fields.')
         elif not init:
-            jd_done = db.get_latest_obs_window_jd()
+            jd_done = db.get_next_observability_jd()
             date_done = Time(jd_done, format='jd')
             print('Observing windows for no further fields required. Stored '
                   f'already at least up to JD {jd_done:.0f}, i.e. '
@@ -1462,7 +1464,7 @@ class SurveyPlanner:
         # add start JD to database for new fields:
         if init:
             field_ids = [field.id for field in fields]
-            db.init_obs_window_jd(field_ids, jd_start)
+            db.init_observability_jd(field_ids, parameter_set_id, jd_start)
 
         print(f'Calculate observing windows for {n_days} days..')
 
@@ -1485,7 +1487,7 @@ class SurveyPlanner:
             counter = manager.Value(int, 0)
             counter_lock = manager.Lock()
             writer = Process(
-                    target=self._add_obs_windows_to_db,
+                    target=self._add_observabilities_to_db,
                     args=(db, counter, queue_obs_windows, jd, parameter_set_id,
                           duration_limit, n_fields, batch_write)
                     )
