@@ -3,9 +3,11 @@
 """Database interface for the Pasiphae survey planner.
 """
 
+from astropy.coordinates import Angle, SkyCoord
 from astropy.time import Time
 from astropy import units as u
 from math import ceil
+import numpy as np
 import os
 import sqlite3
 import warnings
@@ -325,6 +327,277 @@ class DBConnectorSQLite:
         last_insert_id = result[0]
 
         return last_insert_id
+
+    #--------------------------------------------------------------------------
+    def _get_guidestars_by_field_id(self, field_id):
+        """Get guide stars for a specific field from database.
+
+        Parameters
+        ----------
+        field_id : int
+            Only guidestars associated with that field are returned.
+
+        Returns
+        -------
+        results : list of tuples
+            List of guidestars. Each tuple contains the guidestar ID,
+            associated field ID, guidestar right ascension in rad, and
+            guidestar declination in rad.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT *
+                FROM GuideStars
+                WHERE field_id='{0}'
+                """.format(field_id)
+            results = self._query(connection, query).fetchall()
+
+        return results
+
+    #--------------------------------------------------------------------------
+    def _get_guidestars_all(self):
+        """Get all guide stars from database.
+
+        Returns
+        -------
+        results : list of tuples
+            List of guidestars. Each tuple contains the guidestar ID,
+            associated field ID, guidestar right ascension in rad, and
+            guidestar declination in rad.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT *
+                FROM GuideStars
+                WHERE active = 1
+                """
+            results = self._query(connection, query).fetchall()
+
+        return results
+
+    #--------------------------------------------------------------------------
+    def _guidestar_warn_rep(self, field_ids, ras, decs, limit):
+        """Warn if new guidestars for a field are close to guidestars already
+        stored in the database for that field.
+
+        Parameters
+        ----------
+        field_ids : numpy.ndarray
+            IDs of the fields that the guidestar coordinates correspond to.
+        ras : astropy.coord.Angle
+            Guidestar right ascensions.
+        decs : astropy.coord.Angle
+            Guidestar declinations.
+        limit : astropy.coord.Angle
+            Separation limit. If a new guidestart is closer to an existing one
+            than this limit, a warning is printed. The user is asked whether or
+            not to keep this new guidestar.
+
+        Returns
+        -------
+        field_ids : numpy.ndarray
+            Field ID associations of the kept guidestars.
+        ras : astropy.coord.Angle
+            Right ascensions of the kept guidestars.
+        decs : astropy.coord.Angle
+            Declinations of the kept guidestars.
+        """
+
+        # get stored guidestar coordinates and associated field IDs:
+        stored_gs_id = []
+        stored_gs_field_ids = []
+        stored_gs_ras = []
+        stored_gs_decs =[]
+
+        for guidestar_id, field_id, ra, dec, __ in self._get_guidestars_all():
+            stored_gs_id.append(guidestar_id)
+            stored_gs_field_ids.append(field_id)
+            stored_gs_ras.append(ra)
+            stored_gs_decs.append(dec)
+
+        if not stored_gs_id:
+            return field_ids, ras, decs
+
+        stored_gs_coords = SkyCoord(stored_gs_ras, stored_gs_decs, unit='rad')
+        del stored_gs_ras, stored_gs_decs
+
+        stored_gs_field_ids = np.array(stored_gs_field_ids)
+        new_gs_field_ids = field_ids
+        new_gs_coords = SkyCoord(ras, decs)
+
+        keep = np.ones(new_gs_field_ids.shape[0], dtype=bool)
+
+        # iterate through new guidestars:
+        for i, (field_id, coord) in enumerate(zip(
+                new_gs_field_ids, new_gs_coords)):
+            # calculate separations:
+            sel = stored_gs_field_ids == field_id
+
+            if not np.sum(sel):
+                continue
+
+            separation = stored_gs_coords[sel].separation(coord)
+            close = separation < limit
+
+            # ask user about critical cases:
+            if np.any(close):
+                print(f'New guidestar\n  field ID: {field_id}\n'
+                      f'  RA:   {coord.ra.to_string(pad=True)}\n'
+                      f'  Dec: {coord.dec.to_string(alwayssign=1, pad=True)}\n'
+                      'is close to the following stored guidestar(s):')
+
+            for j, k in enumerate(np.nonzero(close)[0], start=1):
+                print(f'{j}. Guidestar ID: {stored_gs_field_ids[sel][k]}\n'
+                      '  RA:   {0}\n'.format(
+                              stored_gs_coords[sel][k].ra.to_string(pad=True)),
+                      '  Dec: {0}\n'.format(
+                              stored_gs_coords[sel][k].dec.to_string(
+                                  alwayssign=1, pad=True)),
+                      f'  separation: {separation[k].deg:.4f} deg'
+                      )
+
+            if any(close):
+                user_in = input('Add this new guidestar anyway? (y/n) ')
+                if user_in.lower() not in ['y', 'yes', 'make it so!']:
+                    keep[i] = False
+
+        field_ids = field_ids[keep]
+        ras = ras[keep]
+        decs = decs[keep]
+
+        return field_ids, ras, decs
+
+    #--------------------------------------------------------------------------
+    def _guidestar_warn_sep(self, field_ids, ras, decs, limit):
+        """Warn if new guidestars for a field are separated too much from the
+        field center.
+
+        Parameters
+        ----------
+        field_ids : numpy.ndarray
+            IDs of the fields that the guidestar coordinates correspond to.
+        ras : astropy.coord.Angle
+            Guidestar right ascensions.
+        decs : astropy.coord.Angle
+            Guidestar declinations.
+        limit : astropy.coord.Angle
+            Separation limit. If a new guidestart is sparated from the
+            corresponding field center by more than this limit, a warning is
+            printed. The user is asked whether or not to keep this new
+            guidestar.
+
+        Returns
+        -------
+        field_ids : numpy.ndarray
+            Field ID associations of the kept guidestars.
+        ras : astropy.coord.Angle
+            Right ascensions of the kept guidestars.
+        decs : astropy.coord.Angle
+            Declinations of the kept guidestars.
+        """
+
+        keep = np.ones(len(field_ids), dtype=bool)
+
+        with SQLiteConnection(self.db_file) as connection:
+            for i, (field_id, ra, dec) in enumerate(zip(field_ids, ras, decs)):
+
+                # query data base:
+                query = """\
+                        SELECT center_ra, center_dec
+                        FROM Fields
+                        WHERE field_id = {0};
+                        """.format(field_id)
+                field_ra, field_dec \
+                        = self._query(connection, query).fetchone()
+
+                # calculate separation:
+                field_coord = SkyCoord(field_ra, field_dec, unit='rad')
+                guidestar_coord = SkyCoord(ra, dec, unit='rad')
+                separation = field_coord.separation(guidestar_coord)
+
+                # ask user about critical cases:
+                if separation > limit:
+                    print(f'New guide star {i} for field ID {field_id} is too '
+                          'far from the field center with separation '
+                          '{0}.'.format(separation.to_string(sep='dms')))
+                    user_in = input('Add it to the database anyway? (y/n) ')
+
+                    if user_in.lower() not in ['y', 'yes', 'make it so!']:
+                        keep[i] = False
+
+        field_ids = field_ids[keep]
+        ras = ras[keep]
+        decs = decs[keep]
+
+        return field_ids, ras, decs
+
+    #--------------------------------------------------------------------------
+    def _guidestar_warn_missing(self):
+        """Check if any fields exist in the database without any associated
+        guidestars.
+
+        Returns
+        -------
+        results : list
+            Field IDs of fields without associated guidestars.
+        """
+
+        # query data base:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                    SELECT f.field_id
+                    FROM Fields AS f
+                    LEFT JOIN GuideStars AS g
+                    ON f.field_id = g.field_id
+                    WHERE g.guidestar_id IS NULL;
+                    """
+            results = [x[0] for x in self._query(connection, query).fetchall()]
+
+            # inform user:
+            if results:
+                print('Fields with the following IDs do not have any '
+                      'guidestars associated:')
+                text = ''
+
+                for field_id in results:
+                    text = f'{text}{field_id}, '
+
+                print(text[:-2])
+
+        return results
+
+    #--------------------------------------------------------------------------
+    def _add_guidestars(self, field_ids, ras, decs):
+        """Add new guidestars to the database.
+
+        Parameters
+        ----------
+        field_ids : numpy.ndarray
+            IDs of the fields that the guidestar coordinates correspond to.
+        ras : astropy.coord.Angle
+            Guidestar right ascensions.
+        decs : astropy.coord.Angle
+            Guidestar declinations.
+
+        Returns
+        -------
+        None
+        """
+
+        data = [(int(field_id), float(ra), float(dec), True) \
+                for field_id, ra, dec in zip(field_ids, ras.rad, decs.rad)]
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO GuideStars (
+                    field_id, ra, dec, active)
+                VALUES (?, ?, ?, ?)
+                """
+            self._query(connection, query, many=data, commit=True)
+
+        print(f'{len(data)} new guidestars added to database.')
 
     #--------------------------------------------------------------------------
     def _get_constraint_id(self, constraint_name):
@@ -1173,7 +1446,7 @@ class DBConnectorSQLite:
             self._query(connection, query, commit=True)
             print("Statuses added to table 'ObservabilityStatus'.")
 
-        return True
+        return None
 
     #--------------------------------------------------------------------------
     def add_observatory(self, name, lat, lon, height, utc_offset):
@@ -1585,12 +1858,150 @@ class DBConnectorSQLite:
         return result
 
     #--------------------------------------------------------------------------
-    def add_guidestars(self):
-        # TODO
-        # optionally warn if not all fields have a guidestar
-        # optionally warn if guidestars are too far separated from field
-        # warn about repetition
-        raise NotImplementedError
+    def add_guidestars(
+            self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
+            warn_sep=0):
+        """Add new guidestars to the database.
+
+        Parameters
+        ----------
+        field_ids : int or list of int
+            IDs of the fields that the guidestar coordinates correspond to.
+        ras : float or list of float
+            Guidestar right ascensions in rad.
+        decs : float or list of floats
+            Guidestar declinations in rad.
+        warn_missing : bool, optional
+            If True, warn about fields that do not have any associated
+            guidestars stored in the database. The default is True.
+        warn_rep : float or astopy.coord.Angle, optional
+            If a float or Angle larger than 0 is given, the user is warned
+            about new guidestars that may be duplicates of existing entries in
+            the database. The value in `warn_rep` is the largest separation
+            allowed not to be considered a duplicate. A float is interpreted as
+            angle in rad. The default is 0.
+        warn_sep : float or astopy.coord.Angle, optional
+            If a float or Angle larger than 0 is given, the user is warned
+            about new guidestars that may be too far off from the corresponding
+            field center. The value in `warn_sep` is the largest separation
+            allowed. A float is interpreted as angle in rad. The default is 0.
+
+        Raises
+        ------
+        ValueError
+            Raised if, `field_ids` is neither int nor list-like.
+            Raised if, `ra` is neither float nor list-like.
+            Raised if, `dec` is neither float nor list-like.
+            Raised if, `warn_missing` is not bool.
+            Raised if, `warn_rep` is neither float nor astropy.coord.Angle.
+            Raised if, `warn_sep` is neither float nor astropy.coord.Angle.
+
+        Returns
+        -------
+        None
+        """
+
+        # check input:
+        if isinstance(field_ids, int):
+            field_ids = np.array([field_ids])
+        else:
+            try:
+                field_ids = np.array(field_ids)
+            except:
+                raise ValueError('`field_ids` must be int or list-like.')
+
+        if type(ra) in [float, int, np.float64]:
+            ras = [ra]
+        else:
+            try:
+                ras = list(ra)
+            except:
+                raise ValueError('`ra` must be float or list-like.')
+
+        ras = Angle(ras, unit='rad')
+
+        if type(dec) in [float, int, np.float64]:
+            decs = [dec]
+        else:
+            try:
+                decs = list(dec)
+            except:
+                raise ValueError('`dec` must be float or list-like.')
+
+        decs = Angle(decs, unit='rad')
+
+        if not isinstance(warn_missing, bool):
+            raise ValueError('`warn_missing` must be bool.')
+
+        if isinstance(warn_rep, Angle):
+            separation_rep = warn_rep
+            warn_rep = True
+        elif type(warn_rep ) in [float, int, np.float64]:
+            separation_rep = Angle(warn_rep, unit='rad')
+            warn_rep = True
+        elif warn_rep:
+            raise ValueError(
+                    '`warn_rep` must be astropy.coordinates.Angle or float.')
+
+        if isinstance(warn_sep, Angle):
+            separation_sep = warn_sep
+            warn_sep = True
+        elif type(warn_sep ) in [float, int, np.float64]:
+            separation_sep = Angle(warn_sep, unit='rad')
+            warn_sep = True
+        elif warn_sep:
+            raise ValueError(
+                    '`warn_sep` must be astropy.coordinates.Angle or float.')
+
+        # warn about repetitions:
+        if warn_rep:
+            field_ids, ras, decs = self._guidestar_warn_rep(
+                    field_ids, ras, decs, separation_rep)
+
+        # warn about large separation from field center:
+        if warn_sep:
+            field_ids, ras, decs = self._guidestar_warn_sep(
+                    field_ids, ras, decs, separation_sep)
+
+        # add to database:
+        self._add_guidestars(field_ids, ras, decs)
+
+        # warn about fields without guidestars:
+        if warn_missing:
+            self._guidestar_warn_missing()
+
+    #--------------------------------------------------------------------------
+    def get_guidestars(self, field_id=None):
+        """Get guide stars from database.
+
+        Parameters
+        ----------
+        field_id : int or None, optional
+            If a field ID is given, only guidestars associated with that field
+            are returned. If None, all guidestars are returned. The default is
+            None.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `field_id` is neither int nor None.
+
+        Returns
+        -------
+        results : list of tuples
+            List of guidestars. Each tuple contains the guidestar ID,
+            associated field ID, guidestar right ascension in rad, and
+            guidestar declination in rad.
+        """
+
+        if isinstance(field_id, int):
+            results = self._get_guidestars_by_field_id(field_id)
+        elif field_id is None:
+           results = self._get_guidestars_all()
+        else:
+            raise ValueError('`field_id` must be int or None.')
+
+        return results
 
     #--------------------------------------------------------------------------
     def add_constraints(self, observatory, twilight, constraints=()):
