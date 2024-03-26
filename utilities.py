@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-#!/usr/bin/env python
-"""Utility functions.
+#!/usr/bin/env python3
+"""Utility functions for the Pasiphae survey planner.
 """
 
 import numpy as np
