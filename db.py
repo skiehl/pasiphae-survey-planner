@@ -75,8 +75,8 @@ class SQLiteConnection:
 
 #==============================================================================
 
-class DBConnectorSQLite:
-    """SQLite database connector."""
+class DBManager:
+    """SQLite3 database manager."""
 
     #--------------------------------------------------------------------------
     def __init__(self, db_file):
@@ -93,6 +93,29 @@ class DBConnectorSQLite:
         """
 
         self.db_file = db_file
+
+    #--------------------------------------------------------------------------
+    def _db_exists(self, verbose=1):
+        """Check if the database file exists.
+
+        Parameters
+        ----------
+        verbose : int, optional
+            If 0, print no notification. If not zero and database does not
+            exist, print notification. The default is 1.
+
+        Returns
+        -------
+        bool
+            True, if file exists. False, otherwise.
+        """
+        exists = os.path.exists(self.db_file)
+
+        if not exists and verbose:
+            print(f'SQLite3 database {self.db_file} does not exist. '
+                  'Use `DBCreator()` to set up a new database.')
+
+        return exists
 
     #--------------------------------------------------------------------------
     def _query(self, connection, query, many=False, commit=False):
@@ -127,53 +150,79 @@ class DBConnectorSQLite:
         return result
 
     #--------------------------------------------------------------------------
-    def _get_observatory_id(self, name):
-        """Get the observatory ID by name.
+    def _last_insert_id(self, connection):
+        """Get the last inserted ID.
 
         Parameters
         ----------
-        name : std
-            Observatory name.
-
-        Raises
-        ------
-        NotInDatabase
-            Raised if observatory name does not exist in database.
+        connection : sqlite3.Connection
+            The database connection.
 
         Returns
         -------
-        observatory_id : int
-            The ID of the observatory in the database.
+        last_insert_id : int
+            The last inserted ID.
+        """
+
+        query = """SELECT last_insert_rowid()"""
+        result = self._query(connection, query).fetchone()
+        last_insert_id = result[0]
+
+        return last_insert_id
+
+#==============================================================================
+
+class TelescopeManager(DBManager):
+    """Database manager for telescopes and constraints."""
+
+    #--------------------------------------------------------------------------
+    def _telescope_exists(self, name):
+        """Check if a telescope is stored in the database under a given name.
+
+        Parameters
+        ----------
+        name : str
+            Telescope name.
+
+        Returns
+        -------
+        exists : bool
+            True, if telescope exists in the database. False, otherwise.
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT observatory_id
-                FROM Observatories
+                SELECT name
+                FROM Telescopes
                 WHERE name = '{0}'
                 """.format(name)
-            result = self._query(connection, query).fetchone()
+            result = self._query(connection, query).fetchall()
 
-        if result is None:
-            raise NotInDatabase(f"Observatory '{name}' does not exist.")
+        exists = len(result) > 0
 
-        observatory_id = result[0]
-
-        return observatory_id
+        return exists
 
     #--------------------------------------------------------------------------
-    def _get_parameter_set_id(self, observatory_id):
-        """Get the parameter set ID associated with an observatory ID.
+    def _get_parameter_set_id(self, telescope_id):
+        """Get the parameter set ID associated with an telescope ID.
 
         Parameters
         ----------
-        observatory_id : int
-            Observatory ID.
+        telescope_id : int
+            Telescope ID.
 
         Returns
         -------
         parameter_set_id : int
             Parameter set ID.
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -181,8 +230,8 @@ class DBConnectorSQLite:
                 SELECT parameter_set_id
                 FROM ParameterSets
                 WHERE (active = 1
-                       AND observatory_id = {0})
-                """.format(observatory_id)
+                       AND telescope_id = {0})
+                """.format(telescope_id)
             result = self._query(connection, query).fetchone()
 
         if result is None:
@@ -191,6 +240,54 @@ class DBConnectorSQLite:
             parameter_set_id = result[0]
 
         return parameter_set_id
+
+    #--------------------------------------------------------------------------
+    def _check_parameter_sets(self, telescope):
+        """Check if an active parameter set exists for specified telescope.
+
+        Parameters
+        ----------
+        telescope : string
+            Telescope name.
+
+        Returns
+        -------
+        add_new : bool
+            True, if a new parameter set should be added. False, otherwise.
+        deactivate_old : bool
+            True, if an existing parameter set should be deactivated. False,
+            otherwise.
+        parameter_set_id : int
+            ID of the parameter set that should be deactivated.
+
+        Notes
+        -----
+        This method calls `get_telescope_id()` and `_get_parameter_set_id()`.
+        """
+
+        # check if active parameter set exists:
+        telescope_id = self.get_telescope_id(telescope)
+        parameter_set_id = self._get_parameter_set_id(telescope_id)
+
+        add_new = False
+        deactivate_old = False
+
+        if parameter_set_id == -1:
+            add_new = True
+        else:
+            response = input(
+                "WARNING: An active parameter set for telescope "
+                f"'{telescope}' exists. If a new set is added the former "
+                "one is marked as inactive. This will deactivate all stored "
+                "observabilities and observing windows based on these "
+                "parameters. They will remain in the database, but will also "
+                "be marked as inactive. Add new parameter set? (y/n) ")
+
+            if response.lower() in ['y', 'yes', 'make it so!']:
+                add_new = True
+                deactivate_old = True
+
+        return add_new, deactivate_old, parameter_set_id
 
     #--------------------------------------------------------------------------
     def _deactivate_parameter_set(self, parameter_set_id):
@@ -204,6 +301,10 @@ class DBConnectorSQLite:
         Returns
         -------
         None
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -230,6 +331,10 @@ class DBConnectorSQLite:
         Returns
         -------
         None
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -256,6 +361,10 @@ class DBConnectorSQLite:
         Returns
         -------
         None
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -293,6 +402,10 @@ class DBConnectorSQLite:
         Returns
         -------
         None
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -307,296 +420,36 @@ class DBConnectorSQLite:
         print(f'{n} corresponding time ranges deactivated.')
 
     #--------------------------------------------------------------------------
-    def _last_insert_id(self, connection):
-        """Get the last inserted ID.
+    def _add_parameter_set(self, telescope):
+        """Add a parameter set to the database.
 
         Parameters
         ----------
-        connection : sqlite3.Connection
-            The database connection.
+        telescope : str
+            Name of the associated telescope.
 
         Returns
         -------
-        last_insert_id : int
-            The last inserted ID.
+        parameter_set_id : int
+            ID of the newly added parameter set.
+
+        Notes
+        -----
+        This method calls `_query()`, `get_telescope_id()`, and
+        `_last_insert_id()`.
         """
 
-        query = """SELECT last_insert_rowid()"""
-        result = self._query(connection, query).fetchone()
-        last_insert_id = result[0]
-
-        return last_insert_id
-
-    #--------------------------------------------------------------------------
-    def _get_guidestars_by_field_id(self, field_id):
-        """Get guide stars for a specific field from database.
-
-        Parameters
-        ----------
-        field_id : int
-            Only guidestars associated with that field are returned.
-
-        Returns
-        -------
-        results : list of tuples
-            List of guidestars. Each tuple contains the guidestar ID,
-            associated field ID, guidestar right ascension in rad, and
-            guidestar declination in rad.
-        """
+        telescope_id = self.get_telescope_id(telescope)
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT *
-                FROM GuideStars
-                WHERE field_id='{0}'
-                """.format(field_id)
-            results = self._query(connection, query).fetchall()
+                INSERT INTO ParameterSets (telescope_id, active, date_added)
+                VALUES ({0}, {1}, CURRENT_TIMESTAMP)
+                """.format(telescope_id, True)
+            self._query(connection, query, commit=True)
+            parameter_set_id = self._last_insert_id(connection)
 
-        return results
-
-    #--------------------------------------------------------------------------
-    def _get_guidestars_all(self):
-        """Get all guide stars from database.
-
-        Returns
-        -------
-        results : list of tuples
-            List of guidestars. Each tuple contains the guidestar ID,
-            associated field ID, guidestar right ascension in rad, and
-            guidestar declination in rad.
-        """
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                SELECT *
-                FROM GuideStars
-                WHERE active = 1
-                """
-            results = self._query(connection, query).fetchall()
-
-        return results
-
-    #--------------------------------------------------------------------------
-    def _guidestar_warn_rep(self, field_ids, ras, decs, limit):
-        """Warn if new guidestars for a field are close to guidestars already
-        stored in the database for that field.
-
-        Parameters
-        ----------
-        field_ids : numpy.ndarray
-            IDs of the fields that the guidestar coordinates correspond to.
-        ras : astropy.coord.Angle
-            Guidestar right ascensions.
-        decs : astropy.coord.Angle
-            Guidestar declinations.
-        limit : astropy.coord.Angle
-            Separation limit. If a new guidestart is closer to an existing one
-            than this limit, a warning is printed. The user is asked whether or
-            not to keep this new guidestar.
-
-        Returns
-        -------
-        field_ids : numpy.ndarray
-            Field ID associations of the kept guidestars.
-        ras : astropy.coord.Angle
-            Right ascensions of the kept guidestars.
-        decs : astropy.coord.Angle
-            Declinations of the kept guidestars.
-        """
-
-        # get stored guidestar coordinates and associated field IDs:
-        stored_gs_id = []
-        stored_gs_field_ids = []
-        stored_gs_ras = []
-        stored_gs_decs =[]
-
-        for guidestar_id, field_id, ra, dec, __ in self._get_guidestars_all():
-            stored_gs_id.append(guidestar_id)
-            stored_gs_field_ids.append(field_id)
-            stored_gs_ras.append(ra)
-            stored_gs_decs.append(dec)
-
-        if not stored_gs_id:
-            return field_ids, ras, decs
-
-        stored_gs_coords = SkyCoord(stored_gs_ras, stored_gs_decs, unit='rad')
-        del stored_gs_ras, stored_gs_decs
-
-        stored_gs_field_ids = np.array(stored_gs_field_ids)
-        new_gs_field_ids = field_ids
-        new_gs_coords = SkyCoord(ras, decs)
-
-        keep = np.ones(new_gs_field_ids.shape[0], dtype=bool)
-
-        # iterate through new guidestars:
-        for i, (field_id, coord) in enumerate(zip(
-                new_gs_field_ids, new_gs_coords)):
-            # calculate separations:
-            sel = stored_gs_field_ids == field_id
-
-            if not np.sum(sel):
-                continue
-
-            separation = stored_gs_coords[sel].separation(coord)
-            close = separation < limit
-
-            # ask user about critical cases:
-            if np.any(close):
-                print(f'New guidestar\n  field ID: {field_id}\n'
-                      f'  RA:   {coord.ra.to_string(pad=True)}\n'
-                      f'  Dec: {coord.dec.to_string(alwayssign=1, pad=True)}\n'
-                      'is close to the following stored guidestar(s):')
-
-            for j, k in enumerate(np.nonzero(close)[0], start=1):
-                print(f'{j}. Guidestar ID: {stored_gs_field_ids[sel][k]}\n'
-                      '  RA:   {0}\n'.format(
-                              stored_gs_coords[sel][k].ra.to_string(pad=True)),
-                      '  Dec: {0}\n'.format(
-                              stored_gs_coords[sel][k].dec.to_string(
-                                  alwayssign=1, pad=True)),
-                      f'  separation: {separation[k].deg:.4f} deg'
-                      )
-
-            if any(close):
-                user_in = input('Add this new guidestar anyway? (y/n) ')
-                if user_in.lower() not in ['y', 'yes', 'make it so!']:
-                    keep[i] = False
-
-        field_ids = field_ids[keep]
-        ras = ras[keep]
-        decs = decs[keep]
-
-        return field_ids, ras, decs
-
-    #--------------------------------------------------------------------------
-    def _guidestar_warn_sep(self, field_ids, ras, decs, limit):
-        """Warn if new guidestars for a field are separated too much from the
-        field center.
-
-        Parameters
-        ----------
-        field_ids : numpy.ndarray
-            IDs of the fields that the guidestar coordinates correspond to.
-        ras : astropy.coord.Angle
-            Guidestar right ascensions.
-        decs : astropy.coord.Angle
-            Guidestar declinations.
-        limit : astropy.coord.Angle
-            Separation limit. If a new guidestart is sparated from the
-            corresponding field center by more than this limit, a warning is
-            printed. The user is asked whether or not to keep this new
-            guidestar.
-
-        Returns
-        -------
-        field_ids : numpy.ndarray
-            Field ID associations of the kept guidestars.
-        ras : astropy.coord.Angle
-            Right ascensions of the kept guidestars.
-        decs : astropy.coord.Angle
-            Declinations of the kept guidestars.
-        """
-
-        keep = np.ones(len(field_ids), dtype=bool)
-
-        with SQLiteConnection(self.db_file) as connection:
-            for i, (field_id, ra, dec) in enumerate(zip(field_ids, ras, decs)):
-
-                # query data base:
-                query = """\
-                        SELECT center_ra, center_dec
-                        FROM Fields
-                        WHERE field_id = {0};
-                        """.format(field_id)
-                field_ra, field_dec \
-                        = self._query(connection, query).fetchone()
-
-                # calculate separation:
-                field_coord = SkyCoord(field_ra, field_dec, unit='rad')
-                guidestar_coord = SkyCoord(ra, dec, unit='rad')
-                separation = field_coord.separation(guidestar_coord)
-
-                # ask user about critical cases:
-                if separation > limit:
-                    print(f'New guide star {i} for field ID {field_id} is too '
-                          'far from the field center with separation '
-                          '{0}.'.format(separation.to_string(sep='dms')))
-                    user_in = input('Add it to the database anyway? (y/n) ')
-
-                    if user_in.lower() not in ['y', 'yes', 'make it so!']:
-                        keep[i] = False
-
-        field_ids = field_ids[keep]
-        ras = ras[keep]
-        decs = decs[keep]
-
-        return field_ids, ras, decs
-
-    #--------------------------------------------------------------------------
-    def _guidestar_warn_missing(self):
-        """Check if any fields exist in the database without any associated
-        guidestars.
-
-        Returns
-        -------
-        results : list
-            Field IDs of fields without associated guidestars.
-        """
-
-        # query data base:
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                    SELECT f.field_id
-                    FROM Fields AS f
-                    LEFT JOIN GuideStars AS g
-                    ON f.field_id = g.field_id
-                    WHERE g.guidestar_id IS NULL;
-                    """
-            results = [x[0] for x in self._query(connection, query).fetchall()]
-
-            # inform user:
-            if results:
-                print('Fields with the following IDs do not have any '
-                      'guidestars associated:')
-                text = ''
-
-                for field_id in results:
-                    text = f'{text}{field_id}, '
-
-                print(text[:-2])
-
-        return results
-
-    #--------------------------------------------------------------------------
-    def _add_guidestars(self, field_ids, ras, decs):
-        """Add new guidestars to the database.
-
-        Parameters
-        ----------
-        field_ids : numpy.ndarray
-            IDs of the fields that the guidestar coordinates correspond to.
-        ras : astropy.coord.Angle
-            Guidestar right ascensions.
-        decs : astropy.coord.Angle
-            Guidestar declinations.
-
-        Returns
-        -------
-        None
-        """
-
-        data = [(int(field_id), float(ra), float(dec), True) \
-                for field_id, ra, dec in zip(field_ids, ras.rad, decs.rad)]
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO GuideStars (
-                    field_id, ra, dec, active)
-                VALUES (?, ?, ?, ?)
-                """
-            self._query(connection, query, many=data, commit=True)
-
-        print(f'{len(data)} new guidestars added to database.')
+        return parameter_set_id
 
     #--------------------------------------------------------------------------
     def _get_constraint_id(self, constraint_name):
@@ -616,6 +469,10 @@ class DBConnectorSQLite:
         -------
         constraint_id : int
             Constraint ID.
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -647,6 +504,8 @@ class DBConnectorSQLite:
         -------
         parameter_name_id : int
             Parameter name ID.
+
+        This method calls `_query()` and `_last_insert_id()`.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -698,6 +557,10 @@ class DBConnectorSQLite:
         Returns
         -------
         None
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         parameter_name_id = self._get_parameter_name_id(parameter_name)
@@ -715,77 +578,6 @@ class DBConnectorSQLite:
                         'NULL' if svalue is None else f"'{svalue}'")
 
             self._query(connection, query, commit=True)
-
-    #--------------------------------------------------------------------------
-    def _check_parameter_sets(self, observatory):
-        """Check if an active parameter set exists for specified observatory.
-
-        Parameters
-        ----------
-        observatory : string
-            Observatory name.
-
-        Returns
-        -------
-        add_new : bool
-            True, if a new parameter set should be added. False, otherwise.
-        deactivate_old : bool
-            True, if an existing parameter set should be deactivated. False,
-            otherwise.
-        parameter_set_id : int
-            ID of the parameter set that should be deactivated.
-        """
-
-        # check if active parameter set exists:
-        observatory_id = self._get_observatory_id(observatory)
-        parameter_set_id = self._get_parameter_set_id(observatory_id)
-
-        add_new = False
-        deactivate_old = False
-
-        if parameter_set_id == -1:
-            add_new = True
-        else:
-            response = input(
-                "WARNING: An active parameter set for observatory "
-                f"'{observatory}' exists. If a new set is added the former "
-                "one is marked as inactive. This will deactivate all stored "
-                "observabilities and observing windows based on these "
-                "parameters. They will remain in the database, but will also "
-                "be marked as inactive. Add new parameter set? (y/n) ")
-
-            if response.lower() in ['y', 'yes', 'make it so!']:
-                add_new = True
-                deactivate_old = True
-
-        return add_new, deactivate_old, parameter_set_id
-
-    #--------------------------------------------------------------------------
-    def _add_parameter_set(self, observatory):
-        """Add a parameter set to the database.
-
-        Parameters
-        ----------
-        observatory : str
-            Name of the associated observatory.
-
-        Returns
-        -------
-        parameter_set_id : int
-            ID of the newly added parameter set.
-        """
-
-        observatory_id = self._get_observatory_id(observatory)
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO ParameterSets (observatory_id, active, date_added)
-                VALUES ({0}, {1}, CURRENT_TIMESTAMP)
-                """.format(observatory_id, True)
-            self._query(connection, query, commit=True)
-            parameter_set_id = self._last_insert_id(connection)
-
-        return parameter_set_id
 
     #--------------------------------------------------------------------------
     def _add_twilight(self, twilight, parameter_set_id):
@@ -808,6 +600,10 @@ class DBConnectorSQLite:
         Returns
         -------
         None
+
+        Notes
+        -----
+        This method calls `_get_constraint_id()` and `_add_parameter()`.
         """
 
         # parse input:
@@ -882,692 +678,333 @@ class DBConnectorSQLite:
                             "constraint get_params() method.")
 
     #--------------------------------------------------------------------------
-    def _add_filter(self, filter_name):
-        """Add a filter to the database.
-
-        Parameters
-        ----------
-        filter_name : str
-            Filter name. Must be a unique identifier in the database.
-
-        Returns
-        -------
-        last_insert_id : int
-            The last inserted ID.
-        """
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO Filters (filter)
-                VALUES ('{0}')
-                """.format(filter_name)
-            self._query(connection, query, commit=True)
-            last_insert_id = self._last_insert_id(connection)
-
-        return last_insert_id
-
-    #--------------------------------------------------------------------------
-    def _add_observation(self, field_id, exposure, repetitions, filter_id):
-        """Add observation to database.
-
-        Parameters
-        ----------
-        field_id : int
-            ID of the associated field.
-        exposure : float
-            Exposure time in seconds.
-        repetitions : int
-            Number of repetitions.
-        filter_id : int
-            Filter ID.
-
-        Returns
-        -------
-        bool
-            True, if a new database was created, False otherwise.
-        """
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO Observations (
-                    field_id, exposure, repetitions, filter_id)
-                VALUES ({0}, {1}, {2}, {3});
-                """.format(field_id, exposure, repetitions, filter_id)
-            self._query(connection, query, commit=True)
-
-    #--------------------------------------------------------------------------
-    def _check_observation_status(self, observation_id):
-        """Get the status of an observation.
-
-        Parameters
-        ----------
-        observation_id : int
-            ID of the observation.
-
-        Returns
-        -------
-        exists : bool
-            True, if observation with specified ID exists. False, otherwise.
-        scheduled : bool
-            True, if observation is marked as scheduled. False, otherwise.
-        done : bool
-            True, if observation is marked as finished. False, otherwise.
-        """
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                SELECT scheduled, done
-                FROM Observations
-                WHERE observation_id = {0}
-                """.format(observation_id)
-            results = self._query(connection, query).fetchall()
-
-        if results:
-            exists = True
-            scheduled = bool(results[0][0])
-            done = bool(results[0][1])
-        else:
-            exists, scheduled, done = False, False, False
-
-        return exists, scheduled, done
-
-    #--------------------------------------------------------------------------
-    def _set_observed_by_id(self, observation_id, date=None):
-        """Set an observation as observed.
-
-        Parameters
-        ----------
-        observation_id : int or list of ints
-            Observation ID(s) that should be marked as observed.
-        date : astropy.time.Time or list therof, optional
-            Date and time of the observation. If not provided, the current
-            time when the observation is marked as observed is stored. The
-            default is None.
-
-        Raises
-        ------
-        ValueError
-            Raised if 'observation_id' is not an int or list.
-        ValueError
-            Raised if 'date' is not an astropy.time.Time instance, list, or
-            None.
-        ValueError
-            If the number of IDs and dates does not match.
-
-        Returns
-        -------
-        None
-        """
-
-        # check input:
-        if isinstance(observation_id, int):
-            observation_ids = [observation_id]
-        elif isinstance(observation_id, list):
-            observation_ids = observation_id
-        else:
-            raise ValueError("'observation_id' must be int or list of int.")
-
-        n_observations = len(observation_ids)
-
-        if date is None:
-            date = Time.now()
-            dates = [date] * n_observations
-        elif isinstance(date, Time):
-            dates = [date] * n_observations
-        elif isinstance(date, list):
-            dates = date
-        else:
-            raise ValueError(
-                    "'date' must be astropy.Time or list of astropy.Time.")
-
-        if len(observation_ids) != len(dates):
-            raise ValueError(
-                    "The same number of IDs and dates must be provided or "
-                    "a single ID and/or date.")
-
-        count_set = 0
-
-        # iterate through observation IDs and dates:
-        for observation_id, date in zip(observation_ids, dates):
-            # check if it exists and if it was observed already:
-            exists, scheduled, done = self._check_observation_status(
-                    observation_id)
-
-            # does not exist - raise error:
-            if not exists:
-                warnings.warn(
-                        f"Observation with ID {observation_id} does not exist "
-                        "in database. Skipped.")
-
-            # already marked as done - warn:
-            elif done:
-                warnings.warn(
-                    f"Observation {observation_id} is already marked as done. "
-                    "Skipped.")
-
-            # set as observed:
-            else:
-                with SQLiteConnection(self.db_file) as connection:
-                    query = """\
-                        UPDATE Observations
-                        SET scheduled = 0, done = 1, date = '{0}'
-                        WHERE observation_id = {1};
-                        """.format(date, observation_id)
-                    self._query(connection, query, commit=True)
-                    count_set += 1
-
-        print(f"{count_set} (out of {n_observations}) observations set as "
-              "done.")
-
-    #--------------------------------------------------------------------------
-    def _set_observed_by_params(
-            self, field_id, exposure, repetitions, filter_name, date=None):
-        """Set a field's observations identified by the observations's
-        parameters as observed.
-
-        Parameters
-        ----------
-        field_id : int or list of ints
-            Field ID.
-        exposure : float or list of floats
-            Exposure time in seconds.
-        repetitions : int or list of ints
-            Number of repetitions.
-        filter_name : str or list of str
-            Filter name.
-        date : astropy.time.Time or list therof, optional
-            Date and time of the observation. If not provided, the current
-            time when the observation is marked as observed is stored. The
-            default is None.
-
-        Raises
-        ------
-        ValueError
-            Raised if 'field_id' is not int or list.
-        ValueError
-            Raised if 'exposure' is not float or list.
-        ValueError
-            Raised if 'exposure' is list and its length does not match the
-            number of field IDs.
-        ValueError
-            Raised if 'repetitions' is not int or list.
-        ValueError
-            Raised if 'repetitions' is list and its length does not match the
-            number of field IDs.
-        ValueError
-            Raised if 'filter_name' is not str or list.
-        ValueError
-            Raised if 'filter_names' is list and its length does not match the
-            number of field IDs.
-
-        Returns
-        -------
-        None
-        """
-
-        # check input:
-        if isinstance(field_id, int):
-            field_ids = [field_id]
-        elif isinstance(field_id, list):
-            field_ids = field_id
-        else:
-            raise ValueError("'field_id' must be int or list of int.")
-
-        n_fields = len(field_ids)
-
-        if exposure is None or isinstance(exposure, float):
-            exposure = [exposure] * n_fields
-        elif isinstance(exposure, list):
-            if len(exposure) != len(field_ids):
-                raise ValueError(
-                        "Number of field IDs and exposure entries does not "
-                        "match.")
-        else:
-            raise ValueError("'exposure' must be float or list of float.")
-
-        if repetitions is None or isinstance(repetitions, int):
-            repetitions = [repetitions] * n_fields
-        elif isinstance(repetitions, list):
-            if len(exposure) != len(field_ids):
-                raise ValueError(
-                        "Number of field IDs and repetion entries does not "
-                        "match.")
-        else:
-            raise ValueError("'repetitions' must be int or list of int.")
-
-        if filter_name is None or isinstance(filter_name, str):
-            filter_name = [filter_name] * n_fields
-        elif isinstance(filter_name, list):
-            if len(exposure) != len(field_ids):
-                raise ValueError(
-                        "Number of field IDs and filter entries does not "
-                        "match.")
-        else:
-            raise ValueError("'filter_name' must be str or list of str.")
-
-        observation_ids = []
-
-        # iterate through fields and additional information:
-        for field_id, exp, rep, filt in zip(
-                field_ids, exposure, repetitions, filter_name):
-            # build query:
-            query = """\
-                SELECT observation_id, field_id, exposure, repetitions, filter,
-                    done
-                FROM Observations AS o
-                LEFT JOIN Filters AS f
-                ON o.filter_id = f.filter_id
-                WHERE field_id = {0}
-                """.format(field_id)
-
-            if exp is not None:
-                query = """\
-                    {0} AND exposure = {1}
-                    """.format(query, exp)
-
-            if rep is not None:
-                query = """\
-                    {0} AND repetitions = {1}
-                    """.format(query, rep)
-
-            if filt is not None:
-                query = """\
-                    {0} AND filter = '{1}'
-                    """.format(query, filt)
-
-            # query observation ID:
-            with SQLiteConnection(self.db_file) as connection:
-                results = self._query(connection, query).fetchall()
-
-            # multiple observation found - user input required:
-            if len(results) > 1:
-                info = "Multiple observations matching the criteria were " \
-                    "found. Type 'A' to mark all as observed or select a " \
-                    "specific observation ID:\n" \
-                    "Obs ID field ID      exp      rep   filter     done\n" \
-                    "------ -------- -------- -------- -------- --------"
-
-                for i, result in enumerate(results):
-                    info = f"{info}\n{i:6d} {result[1]:8d} {result[2]:8.1f} " \
-                        f"{result[3]:8d} {result[4]:>8} {result[5]:6d}"
-
-                userin = input(f"{info}\nSelection: ")
-
-                if userin == 'A':
-                    for result in results:
-                        observation_ids.append(result[0])
-                        # TODO : BUG-fix: if list of dates is provided for all observations, the list of IDs will not match the list of dates and this will crash the next called method. I need to change the list of dates in this case as well.
-
-                else:
-                    try:
-                        userin = int(userin)
-                        observation_ids.append(results[userin][0])
-                    except ValueError:
-                        print('No observation marked as finished.')
-                    except IndexError:
-                        raise IndexError("This is not an allowed ID." )
-
-            # one observation found - save observation ID:
-            elif len(results) == 1:
-                observation_ids.append(results[0][0])
-
-            # no observation found - warn:
-            else:
-                warn_info = "No observation found with the following " \
-                        f"specifications: field ID: {field_id}"
-                if exp is not None:
-                    warn_info = f"{warn_info}, exposure: {exp}"
-                if rep is not None:
-                    warn_info = f"{warn_info}, repetitions: {rep}"
-                if filt is not None:
-                    warn_info = f"{warn_info}, filter: {filt}"
-                warn_info = f"{warn_info}. Skipped."
-                warnings.warn(warn_info)
-
-        # set observed via observation IDs:
-        self._set_observed_by_id(observation_ids, date=date)
-
-    #--------------------------------------------------------------------------
-    def create_db(self):
-        """Create sqlite3 database.
-
-        Returns
-        -------
-        None
-        """
-
-        # create file:
-        os.system(f'sqlite3 {self.db_file}')
-        print(f"Database '{self.db_file}' created.")
-
-        # create tables:
-        with SQLiteConnection(self.db_file) as connection:
-
-            # create Fields tables:
-            query = """\
-                CREATE TABLE Fields(
-                    field_id integer PRIMARY KEY,
-                    fov float,
-                    center_ra float,
-                    center_dec float,
-                    tilt float,
-                    observatory_id integer
-                        REFERENCES Observatories (observatory_id),
-                    active boolean);
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'Fields' created.")
-
-            # create Observatory table:
-            query = """\
-                CREATE TABLE Observatories(
-                    observatory_id integer PRIMARY KEY,
-                    name char(30),
-                    lat float,
-                    lon float,
-                    height float,
-                    utc_offset float);
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'Observatories' created.")
-
-            # create ParameterSet table:
-            query = """\
-                CREATE TABLE ParameterSets(
-                    parameter_set_id integer PRIMARY KEY,
-                    observatory_id integer
-                        REFERENCES Observatories (observatory_id),
-                    active bool,
-                    date_added date,
-                    date_deactivated date);
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'ParameterSets' created.")
-
-            # create Constraints table:
-            query = """\
-                CREATE TABLE Constraints(
-                    constraint_id integer PRIMARY KEY,
-                    constraint_name char(30));
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'Constraints' created.")
-
-            # create Parameters table:
-            query = """\
-                CREATE TABLE Parameters(
-                    parameter_id integer PRIMARY KEY,
-                    constraint_id integer
-                        REFERENCES Constraints (constraint_id),
-                    parameter_set_id integer
-                        REFERENCES ParameterSets (parameter_set_id),
-                    parameter_name_id integer
-                        REFERENCES ParameterNames (parameter_name_id),
-                    value float,
-                    svalue char(30));
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'Parameters' created.")
-
-            # create ParameterNames table:
-            query = """\
-                CREATE TABLE ParameterNames(
-                    parameter_name_id integer PRIMARY KEY,
-                    parameter_name char(30));
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'ParameterNames' created.")
-
-            # create Observability table:
-            query = """\
-                CREATE TABLE Observability(
-                    observability_id integer PRIMARY KEY,
-                    field_id integer
-                        REFERENCES Fields (field_id),
-                    parameter_set_id integer
-                        REFERENCES ParameterSets (parameter_set_id),
-                    jd float,
-                    status_id int
-                        REFERENCES ObservabilityStatus (status_id),
-                    setting_duration float,
-                    active bool);
-                """
-
-            self._query(connection, query, commit=True)
-            print("Table 'Observability' created.")
-
-            # create ObservabilityStatus table:
-            query = """\
-                CREATE TABLE ObservabilityStatus(
-                    status_id integer PRIMARY KEY,
-                    status char(14));
-                """
-
-            self._query(connection, query, commit=True)
-            print("Table 'ObservabilityStatus' created.")
-
-            # create ObsWindows table:
-            query = """\
-                CREATE TABLE ObsWindows(
-                    obswindow_id integer PRIMARY KEY,
-                    field_id integer
-                        REFERENCES Fields (field_id),
-                    observability_id int
-                        REFERENCES Observability (observability_id),
-                    date_start date,
-                    date_stop date,
-                    duration float,
-                    active bool);
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'ObsWindows' created.")
-
-            # create TimeRanges table:
-            query = """\
-                CREATE TABLE TimeRanges(
-                    time_range_id integer PRIMARY KEY,
-                    field_id integer
-                        REFERENCES Fields (field_id),
-                    parameter_set_id int
-                        REFERENCES ParameterSets (parameter_set_id),
-                    jd_first float,
-                    jd_next float,
-                    active bool);
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'TimeRanges' created.")
-
-            # create Observations table:
-            query = """\
-                CREATE TABLE Observations(
-                    observation_id integer PRIMARY KEY,
-                    field_id integer
-                        REFERENCES Fields (field_id),
-                    exposure float,
-                    repetitions int,
-                    filter_id int
-                        REFERENCES Filters (filter_id),
-                    scheduled bool,
-                    done bool,
-                    date date);
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'Observations' created.")
-
-            # create Guidestars table:
-            query = """\
-                CREATE TABLE Guidestars(
-                    guidestar_id integer PRIMARY KEY,
-                    field_id integer
-                        REFERENCES Fields (field_id),
-                    ra float,
-                    dec int,
-                    active bool);
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'Guidestars' created.")
-
-            # create Filters table:
-            query = """\
-                CREATE TABLE Filters(
-                    filter_id integer PRIMARY KEY,
-                    filter char(10));
-                """
-            self._query(connection, query, commit=True)
-            print("Table 'Filters' created.")
-
-            # define constraints:
-            query = """\
-                INSERT INTO Constraints (constraint_name)
-                VALUES
-                    ('Twilight'),
-                    ('AirmassLimit'),
-                    ('ElevationLimit'),
-                    ('HourangleLimit'),
-                    ('MoonDistance'),
-                    ('MoonPolarization'),
-                    ('PolyHADecLimit'),
-                    ('SunDistance');
-                """
-            self._query(connection, query, commit=True)
-            print("Constraints added to table 'Constraints'.")
-
-            # define status:
-            query = """\
-                INSERT INTO ObservabilityStatus (status)
-                VALUES
-                    ('init'),
-                    ('not observable'),
-                    ('rising'),
-                    ('plateauing'),
-                    ('setting');
-                """
-            self._query(connection, query, commit=True)
-            print("Statuses added to table 'ObservabilityStatus'.")
-
-        return None
-
-    #--------------------------------------------------------------------------
-    def add_observatory(self, name, lat, lon, height, utc_offset):
-        """Add observatory to database.
+    def add_telescope(self, name, lat, lon, height, utc_offset):
+        """Add telescope to database.
 
         Parameters
         ----------
         name : str
-            Observatory name. Must be a unique identifier in the database.
+            Telescope name. Must be a unique identifier in the database.
         lat : float
-            Observatory latitude in radians.
+            Telescope latitude in radians.
         lon : float
-            Observatory longitude in radians.
+            Telescope longitude in radians.
         height : float
-            Observatory height in meters.
+            Telescope height in meters.
         utc_offset : int
-            Observatory UTC offset (daylight saving time).
+            Telescope UTC offset (daylight saving time).
+
+        Raises
+        ------
+        ValueError
+            Raised, if `name` is not string.
+            Raised, if `lat` is neither float nor int.
+            Raised, if `lon` is neither float nor int.
+            Raised, if `height` is neither float nor int.
+            Raised, if `utc_offset` is neither float nor int.
 
         Returns
         -------
         None
         """
 
-        with SQLiteConnection(self.db_file) as connection:
-            # check if name exists:
-            query = """\
-                SELECT name
-                FROM Observatories
-                WHERE name = '{0}'
-                """.format(name)
-            result = self._query(connection, query).fetchall()
+        # check input:
+        if not isinstance(name, str):
+            raise ValueError("`name` must be string.")
 
-            if len(result) > 0:
-                print(f"Observatory '{name}' already exists. Name needs " \
+        if type(lat) not in [float, int, np.float64]:
+            raise ValueError("`lat` must be float.")
+
+        if type(lon) not in [float, int, np.float64]:
+            raise ValueError("`lon` must be float.")
+
+        if type(height) not in [float, int, np.float64]:
+            raise ValueError("`height` must be float.")
+
+        if type(utc_offset) not in [float, int, np.float64]:
+            raise ValueError("`utc_offset` must be int or float.")
+
+        # open database connection:
+        with SQLiteConnection(self.db_file) as connection:
+            # check if telescope name exists:
+            if self._telescope_exists(name):
+                print(f"Telescope '{name}' already exists. Name needs " \
                       "to be unique.")
 
                 return None
 
-            # add observatory to database:
+            # add telescope to database:
             query = """\
-                INSERT INTO Observatories (name, lat, lon, height, utc_offset)
+                INSERT INTO Telescopes (name, lat, lon, height, utc_offset)
                 VALUES ('{0}', {1}, {2}, {3}, {4});
                 """.format(name, lat, lon, height, utc_offset)
             self._query(connection, query, commit=True)
-            print(f"Observatory '{name}' added.")
+            print(f"Telescope '{name}' added.")
 
     #--------------------------------------------------------------------------
-    def get_observatory(self, name):
-        """Get observatory from database.
+    def add_constraints(self, telescope, twilight, constraints=()):
+        """Add constraints to database.
 
         Parameters
         ----------
-        name : str
-            Observatory name.
+        telescope : str
+            Name of the telescope that the constraints are associated with.
+        twilight : float or str
+            If str, must be 'astronomical' (-18 deg), 'nautical' (-12 deg),
+            'civil' (-6 deg), or 'sunset' (0 deg). Use float otherwise.
+        constraints : list or tuple of constraints.Constraint, optional
+            The constraints to be added to the database for the specified
+            telescope. The default is ().
 
         Returns
         -------
-        telescope : surveyplanner.Telescope
-            The telescope with parameters as stored in the database.
+        None
+
+        Notes
+        -----
+        This method calls `_telescope_exists()`, `_check_paramter_sets()`,
+        `_deactivate_parameter_set()`, `_deactivate_observabilities()`,
+        `_deactivate_obs_windows()`, `_deactivate_time_ranges()`,
+        `_add_parameter_set()`, `_add_twilight()`, and `_add_constraint()`.
+        """
+
+        # check if telescope exists:
+        if not self._telescope_exists(telescope):
+            print(f"Telescope '{telescope}' does not exist in database. Use "
+                  "TelescopeManager() to manage telescopes or add new ones.")
+            return None
+
+        # check if parameter set exists:
+        add_new, deactivate_old, deactivate_id = self._check_parameter_sets(
+                telescope)
+
+        # deactivate former parameter set and related stored items:
+        if deactivate_old:
+            self._deactivate_parameter_set(deactivate_id)
+            self._deactivate_observabilities(deactivate_id)
+            self._deactivate_obs_windows(deactivate_id)
+            self._deactivate_time_ranges(deactivate_id)
+
+        # add new parameter set:
+        if add_new:
+
+            # add parameter set:
+            parameter_set_id = self._add_parameter_set(telescope)
+
+            # add twilight constraint:
+            self._add_twilight(twilight, parameter_set_id)
+
+            # add constraints:
+            for constraint in constraints:
+                self._add_constraint(constraint, parameter_set_id)
+                constraint_name = constraint.__class__.__name__
+                print(f"Constraint '{constraint_name}' for telescope "
+                      f"'{telescope}'.")
+
+    #--------------------------------------------------------------------------
+    def get_telescope_id(self, name):
+        """Get the telescope ID by name.
+
+        Parameters
+        ----------
+        name : std
+            telescope name.
+
+        Raises
+        ------
+        NotInDatabase
+            Raised if telescope name does not exist in database.
+
+        Returns
+        -------
+        telescope_id : int
+            The ID of the telescope in the database.
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT *
-                FROM Observatories
-                WHERE name='{0}'
+                SELECT telescope_id
+                FROM Telescopes
+                WHERE name = '{0}'
                 """.format(name)
             result = self._query(connection, query).fetchone()
 
-        telescope = {
-            'telescope_id': result[0],
-            'name': result[1],
-            'lat': result[2] * u.rad,
-            'lon': result[3] * u.rad,
-            'height': result[4],
-            'utc_offset': result[5]}
+        if result is None:
+            raise NotInDatabase(f"telescope '{name}' does not exist.")
 
-        return telescope
+        telescope_id = result[0]
+
+        return telescope_id
 
     #--------------------------------------------------------------------------
-    def iter_observatories(self):
-        """Iterate through observatories stored in database.
+    def get_telescope_names(self):
+        """Get telescope names from database.
 
-        Yields
-        ------
-        i : int
-            Iteratively increasing counter.
-        n : int
-            Number of observatories stored in the database.
-        telescope : dict
-            The telescope parameters as stored in the database.
+        Returns
+        -------
+        telescope_names : list of str
+            Each list item is a telescope name stored in the database.
         """
 
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT *
-                FROM Observatories
+                SELECT name
+                FROM Telescopes
                 """
             results = self._query(connection, query).fetchall()
-            n = len(results)
 
-        for i, result in enumerate(results):
+        telescope_names = [result[0] for result in results]
+
+        return telescope_names
+
+    #--------------------------------------------------------------------------
+    def get_telescope(self, name=None):
+        """Get telescope(s) from database.
+
+        Parameters
+        ----------
+        name : str, optional
+            telescope name. If none is given, all telescopes are returned
+            as list of dict. The default is None.
+
+        Returns
+        -------
+        telescopes : dict or list of dict
+            If a name is given, a dictionary is returned with the telescope
+            data. If no name is given a list is returned where each item is a
+            dictionary corresponding to one telescope.
+        """
+        # TODO: add option to include constraints in returned dict
+
+        if name is None:
+            where_clause = ""
+        elif isinstance(name, str):
+            where_clause = f"WHERE name='{name}'"
+        else:
+            raise ValueError("`name` must be str or None.")
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT *
+                FROM Telescopes
+                {0}
+                """.format(where_clause)
+            results = self._query(connection, query).fetchall()
+
+        telescopes = []
+
+        for result in results:
             telescope = {
                 'telescope_id': result[0],
                 'name': result[1],
                 'lat': result[2] * u.rad,
                 'lon': result[3] * u.rad,
                 'height': result[4],
-                'utc_offset': result[5] * u.h}
+                'utc_offset': result[5]}
+            telescopes.append(telescope)
 
-            yield i, n, telescope
+        if name is not None:
+            telescopes = telescopes[0]
+
+        return telescopes
 
     #--------------------------------------------------------------------------
-    def add_fields(self, fields, observatory, active=True, n_batch=1000):
+    def get_constraints(self, telescope):
+        """Query constraints associated with a specified telescope from the
+        database
+
+        Parameters
+        ----------
+        telescope : str
+            Name of the telescope.
+
+        Raises
+        ------
+        NotInDatabase
+            Raised if no parameter set is stored for the specified telescope.
+
+        Returns
+        -------
+        parameter_set_id : int
+            Parameter set ID corresponding to the constraints.
+        constraints : dict of dict
+            Dictionary of the constraints. The keys are the constraint names.
+            The values are dictionaries that contain the constraint parameter
+            names as keys and associated values.
+
+        Notes
+        -----
+        This method calls `get_telescope_id()`, `_get_parameter_set_id()`, and
+        `_query()`.
+        """
+
+        telescope_id = self.get_telescope_id(telescope)
+        parameter_set_id = self._get_parameter_set_id(telescope_id)
+
+        # no parameter set exists:
+        if parameter_set_id == -1:
+            raise NotInDatabase(
+                "No active parameter set stored for telescope "
+                f"'{telescope}'.")
+
+        # query constraints and parameter values:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT c.constraint_name, pn.parameter_name, p.value, p.svalue
+                FROM Parameters p
+                LEFT JOIN ParameterNames pn
+                    ON p.parameter_name_id = pn.parameter_name_id
+                LEFT JOIN Constraints c
+                    ON p.constraint_id = c.constraint_id
+                WHERE p.parameter_set_id = {0}
+                """.format(parameter_set_id)
+            result = self._query(connection, query).fetchall()
+
+        # parse to dictionary:
+        constraints = {}
+
+        for r in result:
+            constraint_name = r[0]
+            param_name = r[1]
+            value = r[2]
+            svalue = r[3]
+
+            if constraint_name not in constraints.keys():
+                constraints[constraint_name] = {}
+
+            if value is None:
+                constraints[constraint_name][param_name] = svalue
+            elif (param_name in constraints[constraint_name] and not
+                  isinstance(constraints[constraint_name][param_name], list)):
+                constraints[constraint_name][param_name] = [
+                        constraints[constraint_name][param_name]]
+                constraints[constraint_name][param_name].append(value)
+            elif param_name in constraints[constraint_name]:
+                constraints[constraint_name][param_name].append(value)
+            else:
+                constraints[constraint_name][param_name] = value
+
+        return parameter_set_id, constraints
+
+#==============================================================================
+
+class FieldManager(DBManager):
+    """Database manager for fields."""
+
+    #--------------------------------------------------------------------------
+    def add_fields(self, fields, telescope, active=True, n_batch=1000):
         """Add fields to the database.
 
         Parameters
         ----------
         fields : fieldgrid.FieldGrid
             The fields to add.
-        observatory : str
-            Name of the observatory associated with the fields.
+        telescope : str
+            Name of the telescope associated with the fields.
         active : bool, optional
             If True, fields are added as active, and as inactive otherwise. The
             default is True.
@@ -1584,18 +1021,24 @@ class DBConnectorSQLite:
         Returns
         -------
         None
+
+        Notes
+        -----
+        This method uses `TelescopeManager()`. This method calls `_query()`.
         """
 
         # check input:
         if not isinstance(fields, FieldGrid):
             raise ValueError("'fields' must be FieldGrid instance.")
+
         if not isinstance(n_batch, int) or n_batch < 1:
             raise ValueError("'n_batch' must be integer > 0.")
 
         center_ras, center_decs = fields.get_center_coords()
         fov = fields.fov
         tilt = fields.tilt
-        observatory_id = self._get_observatory_id(observatory)
+        telescope_manager = TelescopeManager(self.db_file)
+        telescope_id = telescope_manager.get_telescope_id(telescope)
         active = bool(active)
         n_fields = len(fields)
         n_iter = ceil(n_fields / n_batch)
@@ -1611,14 +1054,14 @@ class DBConnectorSQLite:
                             i*100./n_iter),
                     end='')
 
-                data = [(fov, center_ra, center_dec, tilt, observatory_id,
+                data = [(fov, center_ra, center_dec, tilt, telescope_id,
                          active) \
                         for center_ra, center_dec \
                         in zip(center_ras[j:k], center_decs[j:k])]
 
                 query = """\
                     INSERT INTO Fields (
-                        fov, center_ra, center_dec, tilt, observatory_id,
+                        fov, center_ra, center_dec, tilt, telescope_id,
                         active)
                     VALUES (?, ?, ?, ?, ?, ?);
                     """
@@ -1628,15 +1071,15 @@ class DBConnectorSQLite:
 
     #--------------------------------------------------------------------------
     def get_fields(
-            self, observatory=None, observed=None, pending=None, active=True,
+            self, telescope=None, observed=None, pending=None, active=True,
             needs_obs_windows=None, init_obs_windows=False):
         """Get fields from the database, given various selection criteria.
 
         Parameters
         ----------
-        observatory : str, optional
+        telescope : str, optional
             Observatory name. If set, only query fields associated with this
-            observatory. If None, query fields for all observatories. The
+            telescope. If None, query fields for all observatories. The
             default is None.
         observed : bool, optional
             If True, only query fields that have been observed at least once.
@@ -1694,11 +1137,11 @@ class DBConnectorSQLite:
         else:
             condition_pending = " AND nobs_pending = 0"
 
-        # set query condition for observatory:
-        if observatory:
-            condition_observatory = " AND name = '{0}'".format(observatory)
+        # set query condition for telescope:
+        if telescope:
+            condition_telescope = " AND name = '{0}'".format(telescope)
         else:
-            condition_observatory = ""
+            condition_telescope = ""
 
         # set query condition for observing window requirement:
         if needs_obs_windows:
@@ -1713,17 +1156,17 @@ class DBConnectorSQLite:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
-                    f.tilt, o.name observatory, f.active, t.jd_first,
-                    t.jd_next, p.nobs_tot, p.nobs_done,
+                    f.tilt, t.name AS telescope, f.active, r.jd_first,
+                    r.jd_next, p.nobs_tot, p.nobs_done,
                     p.nobs_tot - p.nobs_done AS nobs_pending
                 FROM Fields AS f
                 LEFT JOIN (
                 	SELECT field_id, jd_first, jd_next
                 	FROM TimeRanges
-                	WHERE active = 1) AS t
-                ON f.field_id = t.field_id
-                LEFT JOIN Observatories AS o
-                    ON f.observatory_id = o.observatory_id
+                	WHERE active = 1) AS r
+                ON f.field_id = r.field_id
+                LEFT JOIN Telescopes AS t
+                    ON f.telescope_id = t.telescope_id
                 LEFT JOIN (
                 	SELECT field_id, SUM(Done) nobs_done, COUNT(*) nobs_tot
                 	FROM Observations
@@ -1732,66 +1175,11 @@ class DBConnectorSQLite:
                 ON f.field_id = p.field_id
                 WHERE (active = {0} {1} {2} {3} {4});
                 """.format(
-                        active, condition_observatory, condition_observed,
+                        active, condition_telescope, condition_observed,
                         condition_pending, condition_obswindow)
             result = self._query(connection, query).fetchall()
 
         return result
-
-    #--------------------------------------------------------------------------
-    def iter_fields(
-            self, observatory=None, observed=None, pending=None, active=True,
-            needs_obs_window=None):
-        """Query fields from the database, given various selection criteria,
-        and iterate through the results.
-
-        Parameters
-        ----------
-        observatory : str, optional
-            Observatory name. If set, only query fields associated with this
-            observatory. If None, query fields for all observatories. The
-            default is None.
-        observed : bool, optional
-            If True, only query fields that have been observed at least once.
-            If False, only query fields that have never been observed. In None,
-            query fields independend of the observation status. The default is
-            None.
-        pending : bool, optional
-            If True, only query fields that have pending observations
-            associated. If False, only query fields that have no pending
-            observations associated. If None, query fields independent of
-            whether observations are pending or not. The default is None.
-        active : bool, optional
-            If True, only query active fields. If False, only query inactive
-            fields. If None, query fields independent of whether they are
-            active or not. The default is True.
-        needs_obs_window : float, optional
-            If JD is given, only fields are returned that need additional
-            observing window calculations up to this JD. The default is None.
-
-        Yields
-        ------
-        i : int
-            Iteratively increasing counter.
-        n : int
-            Total number of queried fields.
-        field : tuple
-            The tuple contains the field parameters.
-
-        Notes
-        -----
-        This method first uses the get_fields() method to get the total number
-        of fields. There is no memory advantage in using this iterator over the
-        get_fields() method.
-        """
-
-        fields = self.get_fields(
-                observatory=observatory, observed=observed, pending=pending,
-                active=active, needs_obs_windows=needs_obs_window)
-        n = len(fields)
-
-        for i, field in enumerate(fields):
-            yield i, n, field
 
     #--------------------------------------------------------------------------
     def get_field_by_id(self, field_id):
@@ -1807,19 +1195,23 @@ class DBConnectorSQLite:
         result : list of tuple
             The list contains only one tuple. The tuple contains the field
             parameters.
+
+        Notes
+        -----
+        This method calls `_query()`.
         """
 
         # query data base:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                     SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
-                        f.tilt, o.name observatory, f.active,
+                        f.tilt, o.name telescope, f.active,
                         f.jd_first_obs_window, f.jd_next_obs_window,
                         p.nobs_done, p.nobs_tot,
                         p.nobs_tot - p.nobs_done AS nobs_pending
                     FROM Fields AS f
                     LEFT JOIN Observatories AS o
-                        ON f.observatory_id = o.observatory_id
+                        ON f.telescope_id = o.telescope_id
                     LEFT JOIN (
                         SELECT field_id, SUM(Done) nobs_done, COUNT(*) nobs_tot
                         FROM Observations
@@ -1856,9 +1248,284 @@ class DBConnectorSQLite:
 
         return result
 
+#==============================================================================
+
+class GuidestarManager(DBManager):
+    """Database manager for guide stars."""
+
     #--------------------------------------------------------------------------
-    def add_guidestars(
-            self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
+    def _get_by_field_id(self, field_id):
+        """Get guide stars for a specific field from database.
+
+        Parameters
+        ----------
+        field_id : int
+            Only guidestars associated with that field are returned.
+
+        Returns
+        -------
+        results : list of tuples
+            List of guidestars. Each tuple contains the guidestar ID,
+            associated field ID, guidestar right ascension in rad, and
+            guidestar declination in rad.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT *
+                FROM Guidestars
+                WHERE field_id='{0}'
+                """.format(field_id)
+            results = self._query(connection, query).fetchall()
+
+        return results
+
+    #--------------------------------------------------------------------------
+    def _get_all(self):
+        """Get all guide stars from database.
+
+        Returns
+        -------
+        results : list of tuples
+            List of guidestars. Each tuple contains the guidestar ID,
+            associated field ID, guidestar right ascension in rad, and
+            guidestar declination in rad.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT *
+                FROM Guidestars
+                WHERE active = 1
+                """
+            results = self._query(connection, query).fetchall()
+
+        return results
+
+    #--------------------------------------------------------------------------
+    def _warn_repetition(self, field_ids, ras, decs, limit):
+        """Warn if new guidestars for a field are close to guidestars already
+        stored in the database for that field.
+
+        Parameters
+        ----------
+        field_ids : numpy.ndarray
+            IDs of the fields that the guidestar coordinates correspond to.
+        ras : astropy.coord.Angle
+            Guidestar right ascensions.
+        decs : astropy.coord.Angle
+            Guidestar declinations.
+        limit : astropy.coord.Angle
+            Separation limit. If a new guidestart is closer to an existing one
+            than this limit, a warning is printed. The user is asked whether or
+            not to keep this new guidestar.
+
+        Returns
+        -------
+        field_ids : numpy.ndarray
+            Field ID associations of the kept guidestars.
+        ras : astropy.coord.Angle
+            Right ascensions of the kept guidestars.
+        decs : astropy.coord.Angle
+            Declinations of the kept guidestars.
+        """
+
+        # get stored guidestar coordinates and associated field IDs:
+        stored_gs_id = []
+        stored_gs_field_ids = []
+        stored_gs_ras = []
+        stored_gs_decs =[]
+
+        for guidestar_id, field_id, ra, dec, __ in self._get_all():
+            stored_gs_id.append(guidestar_id)
+            stored_gs_field_ids.append(field_id)
+            stored_gs_ras.append(ra)
+            stored_gs_decs.append(dec)
+
+        if not stored_gs_id:
+            return field_ids, ras, decs
+
+        stored_gs_coords = SkyCoord(stored_gs_ras, stored_gs_decs, unit='rad')
+        del stored_gs_ras, stored_gs_decs
+
+        stored_gs_field_ids = np.array(stored_gs_field_ids)
+        new_gs_field_ids = field_ids
+        new_gs_coords = SkyCoord(ras, decs)
+
+        keep = np.ones(new_gs_field_ids.shape[0], dtype=bool)
+
+        # iterate through new guidestars:
+        for i, (field_id, coord) in enumerate(zip(
+                new_gs_field_ids, new_gs_coords)):
+            # calculate separations:
+            sel = stored_gs_field_ids == field_id
+
+            if not np.sum(sel):
+                continue
+
+            separation = stored_gs_coords[sel].separation(coord)
+            close = separation <= limit
+
+            # ask user about critical cases:
+            if np.any(close):
+                print(f'New guidestar\n  field ID: {field_id}\n'
+                      f'  RA:   {coord.ra.to_string(pad=True)}\n'
+                      f'  Dec: {coord.dec.to_string(alwayssign=1, pad=True)}\n'
+                      'is close to the following stored guidestar(s):')
+
+            for j, k in enumerate(np.nonzero(close)[0], start=1):
+                print(f'{j}. Guidestar ID: {stored_gs_field_ids[sel][k]}\n'
+                      '  RA:   {0}\n'.format(
+                              stored_gs_coords[sel][k].ra.to_string(pad=True)),
+                      '  Dec: {0}\n'.format(
+                              stored_gs_coords[sel][k].dec.to_string(
+                                  alwayssign=1, pad=True)),
+                      f'  separation: {separation[k].deg:.4f} deg'
+                      )
+
+            if any(close):
+                user_in = input('Add this new guidestar anyway? (y/n) ')
+                if user_in.lower() not in ['y', 'yes', 'make it so!']:
+                    keep[i] = False
+
+        field_ids = field_ids[keep]
+        ras = ras[keep]
+        decs = decs[keep]
+
+        return field_ids, ras, decs
+
+    #--------------------------------------------------------------------------
+    def _warn_separation(self, field_ids, ras, decs, limit):
+        """Warn if new guidestars for a field are separated too much from the
+        field center.
+
+        Parameters
+        ----------
+        field_ids : numpy.ndarray
+            IDs of the fields that the guidestar coordinates correspond to.
+        ras : astropy.coord.Angle
+            Guidestar right ascensions.
+        decs : astropy.coord.Angle
+            Guidestar declinations.
+        limit : astropy.coord.Angle
+            Separation limit. If a new guidestart is sparated from the
+            corresponding field center by more than this limit, a warning is
+            printed. The user is asked whether or not to keep this new
+            guidestar.
+
+        Returns
+        -------
+        field_ids : numpy.ndarray
+            Field ID associations of the kept guidestars.
+        ras : astropy.coord.Angle
+            Right ascensions of the kept guidestars.
+        decs : astropy.coord.Angle
+            Declinations of the kept guidestars.
+        """
+
+        keep = np.ones(len(field_ids), dtype=bool)
+
+        with SQLiteConnection(self.db_file) as connection:
+            for i, (field_id, ra, dec) in enumerate(zip(field_ids, ras, decs)):
+
+                # query data base:
+                query = """\
+                        SELECT center_ra, center_dec
+                        FROM Fields
+                        WHERE field_id = {0};
+                        """.format(field_id)
+                field_ra, field_dec \
+                        = self._query(connection, query).fetchone()
+
+                # calculate separation:
+                field_coord = SkyCoord(field_ra, field_dec, unit='rad')
+                guidestar_coord = SkyCoord(ra, dec, unit='rad')
+                separation = field_coord.separation(guidestar_coord)
+
+                # ask user about critical cases:
+                if separation > limit:
+                    print(f'New guide star {i} for field ID {field_id} is too '
+                          'far from the field center with separation '
+                          '{0}.'.format(separation.to_string(sep='dms')))
+                    user_in = input('Add it to the database anyway? (y/n) ')
+
+                    if user_in.lower() not in ['y', 'yes', 'make it so!']:
+                        keep[i] = False
+
+        field_ids = field_ids[keep]
+        ras = ras[keep]
+        decs = decs[keep]
+
+        return field_ids, ras, decs
+
+    #--------------------------------------------------------------------------
+    def _warn_missing(self):
+        """Check if any fields exist in the database without any associated
+        guidestars.
+
+        Returns
+        -------
+        results : list
+            Field IDs of fields without associated guidestars.
+        """
+
+        # query data base:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                    SELECT f.field_id
+                    FROM Fields AS f
+                    LEFT JOIN Guidestars AS g
+                    ON f.field_id = g.field_id
+                    WHERE g.guidestar_id IS NULL;
+                    """
+            results = [x[0] for x in self._query(connection, query).fetchall()]
+
+            # inform user:
+            if results:
+                print('\nWARNING: Fields with the following IDs do not have '
+                      'any guidestars associated:')
+                text = ''
+
+                for field_id in results:
+                    text = f'{text}{field_id}, '
+
+                print(text[:-2])
+
+        return results
+
+    #--------------------------------------------------------------------------
+    def _add_guidestar(self, field_ids, ras, decs):
+        """Add new guidestars to the database.
+
+        Parameters
+        ----------
+        field_ids : numpy.ndarray
+            IDs of the fields that the guidestar coordinates correspond to.
+        ras : astropy.coord.Angle
+            Guidestar right ascensions.
+        decs : astropy.coord.Angle
+            Guidestar declinations.
+
+        Returns
+        -------
+        None
+        """
+
+        data = [(int(field_id), float(ra), float(dec), True) \
+                for field_id, ra, dec in zip(field_ids, ras.rad, decs.rad)]
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO Guidestars (
+                    field_id, ra, dec, active)
+                VALUES (?, ?, ?, ?)
+                """
+            self._query(connection, query, many=data, commit=True)
+
+        print(f'{len(data)} new guidestars added to database.')
+
+    #--------------------------------------------------------------------------
+    def add_guidestar(self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
             warn_sep=0):
         """Add new guidestars to the database.
 
@@ -1898,6 +1565,11 @@ class DBConnectorSQLite:
         Returns
         -------
         None
+
+        Notes
+        -----
+        This method calls `_add_guidestar()`, `_warn_repetition()`,
+        `_warn_separation()`, and `_warn_missing()`.
         """
 
         # check input:
@@ -1954,23 +1626,23 @@ class DBConnectorSQLite:
 
         # warn about repetitions:
         if warn_rep:
-            field_ids, ras, decs = self._guidestar_warn_rep(
+            field_ids, ras, decs = self._warn_repetition(
                     field_ids, ras, decs, separation_rep)
 
         # warn about large separation from field center:
         if warn_sep:
-            field_ids, ras, decs = self._guidestar_warn_sep(
+            field_ids, ras, decs = self._warn_separation(
                     field_ids, ras, decs, separation_sep)
 
         # add to database:
-        self._add_guidestars(field_ids, ras, decs)
+        self._add_guidestar(field_ids, ras, decs)
 
         # warn about fields without guidestars:
         if warn_missing:
-            self._guidestar_warn_missing()
+            self._warn_missing()
 
     #--------------------------------------------------------------------------
-    def get_guidestars(self, field_id=None):
+    def get_guidestar(self, field_id=None):
         """Get guide stars from database.
 
         Parameters
@@ -1991,132 +1663,322 @@ class DBConnectorSQLite:
             List of guidestars. Each tuple contains the guidestar ID,
             associated field ID, guidestar right ascension in rad, and
             guidestar declination in rad.
+
+        Notes
+        -----
+        This method calls `_get_by_field_id()` or `_get_all()`
         """
 
         if isinstance(field_id, int):
-            results = self._get_guidestars_by_field_id(field_id)
+            results = self._get_by_field_id(field_id)
         elif field_id is None:
-           results = self._get_guidestars_all()
+           results = self._get_all()
         else:
             raise ValueError('`field_id` must be int or None.')
 
         return results
 
+#==============================================================================
+
+class ObservationManager(DBManager):
+    """Database manager for fields."""
+
     #--------------------------------------------------------------------------
-    def add_constraints(self, observatory, twilight, constraints=()):
-        """Add constraints to database.
+    def _add_filter(self, filter_name):
+        """Add a filter to the database.
 
         Parameters
         ----------
-        observatory : str
-            Name of the observatory that the constraints are associated with.
-        twilight : float or str
-            If str, must be 'astronomical' (-18 deg), 'nautical' (-12 deg),
-            'civil' (-6 deg), or 'sunset' (0 deg). Use float otherwise.
-        constraints : list or tuple of constraints.Constraint, optional
-            The constraints to be added to the database for the specified
-            observatory. The default is ().
+        filter_name : str
+            Filter name. Must be a unique identifier in the database.
+
+        Returns
+        -------
+        last_insert_id : int
+            The last inserted ID.
+
+        This method calls `_query()` and `_last_insert_id()`.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO Filters (filter)
+                VALUES ('{0}')
+                """.format(filter_name)
+            self._query(connection, query, commit=True)
+            last_insert_id = self._last_insert_id(connection)
+
+        return last_insert_id
+
+    #--------------------------------------------------------------------------
+    def get_filter_id(self, filter_name):
+        """Get the filter ID by the filter name.
+
+        Parameters
+        ----------
+        filter_name : str
+            Filter name.
+
+        Returns
+        -------
+        filter_id : int
+            Filter ID.
+
+        Notes
+        -----
+        If the filter name does not exist in the database, the user is asked
+        whether or not to add it.
+        This method calls `_add_filter()`.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT filter_id, filter
+                FROM Filters
+                WHERE filter='{0}';
+                """.format(filter_name)
+            results = self._query(connection, query).fetchall()
+
+        if len(results) == 0:
+            userin = input(
+                    f"Filter '{filter_name} does not exist. Add it to data " \
+                    "base? (y/n)")
+
+            if userin.lower() in ['y', 'yes', 'make it so!']:
+                filter_id = self._add_filter(filter_name)
+            else:
+                filter_id = False
+
+        else:
+            filter_id = results[0][0]
+
+        return filter_id
+
+    #--------------------------------------------------------------------------
+    def add_observations(
+            self, exposure, repetitions, filter_name, field_id=None,
+            telescope=None):
+        """Add observation to database.
+
+        Parameters
+        ----------
+        exposure : float or list of float
+            Exposure time in seconds.
+        repetitions : int or list of int
+            Number of repetitions.
+        filter_name : str or list of str
+            Filter name.
+        field_id : int or list of int, optional
+            ID(s) of the associated field(s). If None, the same observation is
+            added to all active fields. The default is None.
+        telescope : str, optional
+            If field_id is None, this argument can be used to add observations
+            only to those fields that are associated to the specified
+            telescope. Otherwise, observations are added to all active
+            fields. The default is None.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method uses `FieldManager()`. This method calls `get_filter_id()`,
+        `get_observations()`.
+        """
+
+        # prepare field IDs:
+        if field_id is None:
+            field_manager = FieldManager(self.db_file)
+            field_id = [field[0] for field in
+                        field_manager.get_fields(
+                            telescope=telescope, active=True)]
+        elif isinstance(field_id, int):
+            field_id = [field_id]
+        elif isinstance(field_id, list):
+            pass
+        else:
+            raise ValueError(
+                    "'field_id' needs to be int, list of int, or None.")
+
+        n_fields = len(field_id)
+
+        # prepare exposures:
+        if type(exposure) in [float, int]:
+            exposure = float(exposure)
+            exposure = [exposure for __ in range(n_fields)]
+        elif isinstance(exposure, list):
+            if len(exposure) != n_fields:
+                raise ValueError(
+                        "'exposures' list need to be of the same length as " \
+                        "'field_id'.")
+        else:
+            raise ValueError("'exposure' needs to be float or list of floats.")
+
+        # prepare repetitions:
+        if isinstance(repetitions, int):
+            repetitions = [repetitions for __ in range(n_fields)]
+        elif isinstance(repetitions, list):
+            if len(repetitions) != n_fields:
+                raise ValueError(
+                        "'repetitions' list need to be of the same length " \
+                        "'as field_id'.")
+        else:
+            raise ValueError("'repetitions' needs to be int or list of int.")
+
+        # prepare filters:
+        if isinstance(filter_name, str):
+            filter_name = [filter_name for __ in range(n_fields)]
+        elif isinstance(filter_name, list):
+            if len(filter_name) != n_fields:
+                raise ValueError(
+                        "'filter_name' list need to be of the same length " \
+                        "'as field_id'.")
+        else:
+            raise ValueError("'filter_name' needs to be str or list of str.")
+
+        check_existence = True
+        skip_existing = False
+        filter_ids = {}
+        data = []
+
+        # prepare entries for adding:
+        for field, exp, rep, filt in zip(
+                field_id, exposure, repetitions, filter_name):
+            # check if filter exists:
+            if filt not in filter_ids.keys():
+                filter_id = self.get_filter_id(filt)
+
+                # stop, if the filter did not exist and was not added:
+                if filter_id is False:
+                    print("Filter was not added to database. No " \
+                          "observations are added either.")
+                    return False
+
+                filter_ids[filt] = filter_id
+
+            # check if observation entry exists:
+            if check_existence:
+                observations = self.get_observations(
+                        field, exp, rep, filter_ids[filt])
+                n_obs = len(observations)
+                n_done = len([1 for obs in observations if obs[6]])
+
+                if n_obs > n_done and skip_existing:
+                    continue
+                elif n_obs:
+                    userin = input(
+                            f"{n_obs} observation(s) with the same " \
+                            "parameters already exist in data base. " \
+                            f"{n_done} out of those are finished. Add new " \
+                            "observation anyway? (y/n, 'ALL' to add all " \
+                            "following without asking, or 'NONE' to skip " \
+                            "all existing observations that have not been " \
+                            "finished).")
+
+                    if userin.lower() in ['y', 'yes', 'make it so!']:
+                        pass
+                    elif userin == 'ALL':
+                        check_existence = False
+                    elif userin == 'NONE':
+                        skip_existing = True
+                        continue
+                    else:
+                        continue
+
+            # add to data:
+            data.append((field, exp, rep, filter_ids[filt], False, False))
+
+        # add to data base:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                INSERT INTO Observations (
+                    field_id, exposure, repetitions, filter_id, scheduled,
+                    done)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """
+            self._query(connection, query, many=data, commit=True)
+
+        n_obs = len(data)
+        print(f"{n_obs} observations added to data base.")
+
+    #--------------------------------------------------------------------------
+    def get_observations(self, field_id, exposure, repetitions, filter_id):
+        # TODO: make all these parameters optional
+        """Query an observation from the database.
+
+        Parameters
+        ----------
+        field_id : int
+            ID of the associated field.
+        exposure : float
+            Exposure time in seconds.
+        repetitions : int
+            Number of repetitions.
+        filter_id : int
+            Filter ID.
+
+        Returns
+        -------
+        results : list of tuples
+            The list is empty if no observation was found. Otherwise, the list
+            contains one tuple. The tuple contains the observation ID, field
+            ID, exposure time in seconds, number of repetitions, filter_id,
+            its scheduling status, its observation status, the datetime of
+            the observation if it was finished.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT *
+                FROM Observations
+                WHERE (
+                    field_id={0} AND exposure={1} AND repetitions={2}
+                    AND filter_id={3});
+                """.format(field_id, exposure, repetitions, filter_id)
+            results = self._query(connection, query).fetchall()
+
+        return results
+
+#==============================================================================
+
+class ObservabilityManager(DBManager):
+    """Database manager for observabilities and observing windows."""
+
+    #--------------------------------------------------------------------------
+    def init_observability_jd(self, field_ids, parameter_set_id, jd):
+        """Set JD of first observing window calculation for new fields.
+
+        Parameters
+        ----------
+        field_ids : list of int
+            List of field IDs.
+        parameter_set_id : int
+            Parameter set ID to store with the time range entries.
+        jd : float
+            JD of the first observability calculation for the fields with
+            IDs given by the first argument.
 
         Returns
         -------
         None
         """
 
-        # check if parameter set exists:
-        add_new, deactivate_old, deactivate_id = self._check_parameter_sets(
-                observatory)
+        # prepare data to write:
+        data = []
 
-        # deactivate former parameter set and related stored items:
-        if deactivate_old:
-            self._deactivate_parameter_set(deactivate_id)
-            self._deactivate_observabilities(deactivate_id)
-            self._deactivate_obs_windows(deactivate_id)
-            self._deactivate_time_ranges(deactivate_id)
+        for field_id in field_ids:
+            data.append((field_id, parameter_set_id, jd, True))
 
-        # add new parameter set:
-        if add_new:
-            # add parameter set:
-            parameter_set_id = self._add_parameter_set(observatory)
-
-            # add twilight constraint:
-            self._add_twilight(twilight, parameter_set_id)
-
-            # add constraints:
-            for constraint in constraints:
-                self._add_constraint(constraint, parameter_set_id)
-
-    #--------------------------------------------------------------------------
-    def get_constraints(self, observatory):
-        """Query constraints associated with a specified observatory from the
-        database
-
-        Parameters
-        ----------
-        observatory : str
-            Name of the observatory.
-
-        Raises
-        ------
-        NotInDatabase
-            Raised if no parameter set is stored for the specified observatory.
-
-        Returns
-        -------
-        parameter_set_id : int
-            Parameter set ID corresponding to the constraints.
-        constraints : dict of dict
-            Dictionary of the constraints. The keys are the constraint names.
-            The values are dictionaries that contain the constraint parameter
-            names as keys and associated values.
-        """
-
-        observatory_id = self._get_observatory_id(observatory)
-        parameter_set_id = self._get_parameter_set_id(observatory_id)
-
-        # no parameter set exists:
-        if parameter_set_id == -1:
-            raise NotInDatabase(
-                "No active parameter set stored for observatory "
-                f"'{observatory}'.")
-
-        # query constraints and parameter values:
+        # write to database:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT c.constraint_name, pn.parameter_name, p.value, p.svalue
-                FROM Parameters p
-                LEFT JOIN ParameterNames pn
-                    ON p.parameter_name_id = pn.parameter_name_id
-                LEFT JOIN Constraints c
-                    ON p.constraint_id = c.constraint_id
-                WHERE p.parameter_set_id = {0}
-                """.format(parameter_set_id)
-            result = self._query(connection, query).fetchall()
-
-        # parse to dictionary:
-        constraints = {}
-
-        for r in result:
-            constraint_name = r[0]
-            param_name = r[1]
-            value = r[2]
-            svalue = r[3]
-
-            if constraint_name not in constraints.keys():
-                constraints[constraint_name] = {}
-
-            if value is None:
-                constraints[constraint_name][param_name] = svalue
-            elif (param_name in constraints[constraint_name] and not
-                  isinstance(constraints[constraint_name][param_name], list)):
-                constraints[constraint_name][param_name] = [
-                        constraints[constraint_name][param_name]]
-                constraints[constraint_name][param_name].append(value)
-            elif param_name in constraints[constraint_name]:
-                constraints[constraint_name][param_name].append(value)
-            else:
-                constraints[constraint_name][param_name] = value
-
-        return parameter_set_id, constraints
+                INSERT INTO TimeRanges (
+                    field_id, parameter_set_id, jd_first, active
+                )
+                VALUES (?, ?, ?, ?)
+                """
+            self._query(connection, query, many=data, commit=True)
 
     #--------------------------------------------------------------------------
     def add_observability(
@@ -2306,39 +2168,17 @@ class DBConnectorSQLite:
             connection.commit()
 
     #--------------------------------------------------------------------------
-    def init_observability_jd(self, field_ids, parameter_set_id, jd):
-        """Set JD of first observing window calculation for new fields.
+    def get_next_observability_jd(self):
 
-        Parameters
-        ----------
-        field_ids : list of int
-            List of field IDs.
-        parameter_set_id : int
-            Parameter set ID to store with the time range entries.
-        jd : float
-            JD of the first observability calculation for the fields with
-            IDs given by the first argument.
-
-        Returns
-        -------
-        None
-        """
-
-        # prepare data to write:
-        data = []
-
-        for field_id in field_ids:
-            data.append((field_id, parameter_set_id, jd, True))
-
-        # write to database:
         with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO TimeRanges (
-                    field_id, parameter_set_id, jd_first, active
-                )
-                VALUES (?, ?, ?, ?)
-                """
-            self._query(connection, query, many=data, commit=True)
+            query = """
+            SELECT MIN(jd_next)
+            FROM TimeRanges
+            WHERE active=1
+            """
+            jd = self._query(connection, query).fetchall()[0][0]
+
+        return jd
 
     #--------------------------------------------------------------------------
     def get_next_observability_id(self):
@@ -2354,85 +2194,23 @@ class DBConnectorSQLite:
         return next_id
 
     #--------------------------------------------------------------------------
-    def get_next_observability_jd(self):
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """
-            SELECT MIN(jd_next)
-            FROM TimeRanges
-            WHERE active=1
-            """
-            jd = self._query(connection, query).fetchall()[0][0]
-
-        return jd
-
-    #--------------------------------------------------------------------------
-    def get_obs_windows_from_to(self, field_id, date_start, date_stop):
-        """Query observing window from the database for a specified field
-        between a start and a stop date.
-
-        Parameters
-        ----------
-        field_id : int
-            ID of the field whose observing windows are queried.
-        date_start : astropy.time.Time
-            Query observing windows later than this time.
-        date_stop : astropy.time.Time
-            Query observing windows earlier than this time.
+    def get_status(self):
+        """Get status ID and corresponding status.
 
         Returns
         -------
-        obs_windows : list of tuples
-            List of the queried observing windows. Each tuple contains the
-            observing window ID, the field ID, start and stop date, duration,
-            and active status.
+        results : list of tuples
+            Each entry contains an ID and its corresponding status string.
         """
 
         with SQLiteConnection(self.db_file) as connection:
-            query = """
-            SELECT *
-            FROM ObsWindows
-            WHERE (field_id={0} AND
-                   date_start>'{1}' AND
-                   date_stop<'{2}')
-            """.format(field_id, date_start.iso, date_stop.iso)
-            obs_windows = self._query(connection, query).fetchall()
+            query = """\
+                SELECT status_id, status
+                FROM ObservabilityStatus;
+                """
+            results = self._query(connection, query).fetchall()
 
-        return obs_windows
-
-    #--------------------------------------------------------------------------
-    def get_obs_windows_by_datetime(self, field_id, datetime):
-        """Query observing window from the database for a specified field
-        for a specific date and time.
-
-
-        Parameters
-        ----------
-        field_id : int
-            ID of the field whose observing windows are queried.
-        datetime : astropy.time.Time
-            Query the observing window that includes the specified datetime.
-
-        Returns
-        -------
-        obs_window : list of tuples
-            List of the queried observing windows. The list contains either no
-            tuple, if no observing window includes the specified datetime, or
-            one tuple for the resulting observing window. The tuple contains
-            the observing window ID, the field ID, start and stop date,
-            duration, and active status.
-        """
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """
-            SELECT * FROM ObsWindows
-            WHERE (field_id={0} AND
-                   date_start<'{1}' AND
-                   date_stop>'{1}')
-            """.format(field_id, datetime.iso)
-            obs_windows = self._query(connection, query).fetchall()
-
-        return obs_windows
+        return results
 
     #--------------------------------------------------------------------------
     def get_obs_window_durations(self, field_id, jd_start, jd_stop):
@@ -2477,109 +2255,383 @@ class DBConnectorSQLite:
 
         return results
 
+#==============================================================================
+
+class DBCreator(DBManager):
+    """Database manager for creating a new survey planner database."""
+
     #--------------------------------------------------------------------------
-    def get_status(self):
-        """Get status ID and corresponding status.
+    def _create(self):
+        """Create sqlite3 database.
 
         Returns
         -------
-        results : list of tuples
-            Each entry contains an ID and its corresponding status string.
+        None
         """
 
+        # create file:
+        os.system(f'sqlite3 {self.db_file}')
+        print(f"Database '{self.db_file}' created.")
+
+        # create tables:
         with SQLiteConnection(self.db_file) as connection:
+
+            # create Fields tables:
             query = """\
-                SELECT status_id, status
-                FROM ObservabilityStatus;
+                CREATE TABLE Fields(
+                    field_id integer PRIMARY KEY,
+                    fov float,
+                    center_ra float,
+                    center_dec float,
+                    tilt float,
+                    telescope_id integer
+                        REFERENCES Telescopes (telescope_id),
+                    active boolean);
                 """
-            results = self._query(connection, query).fetchall()
+            self._query(connection, query, commit=True)
+            print("Table 'Fields' created.")
 
-        return results
+            # create Telescopes table:
+            query = """\
+                CREATE TABLE Telescopes(
+                    telescope_id integer PRIMARY KEY,
+                    name char(30),
+                    lat float,
+                    lon float,
+                    height float,
+                    utc_offset float);
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'Telescopes' created.")
+
+            # create ParameterSet table:
+            query = """\
+                CREATE TABLE ParameterSets(
+                    parameter_set_id integer PRIMARY KEY,
+                    telescope_id integer
+                        REFERENCES Telescopes (telescope_id),
+                    active bool,
+                    date_added date,
+                    date_deactivated date);
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'ParameterSets' created.")
+
+            # create Constraints table:
+            query = """\
+                CREATE TABLE Constraints(
+                    constraint_id integer PRIMARY KEY,
+                    constraint_name char(30));
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'Constraints' created.")
+
+            # create Parameters table:
+            query = """\
+                CREATE TABLE Parameters(
+                    parameter_id integer PRIMARY KEY,
+                    constraint_id integer
+                        REFERENCES Constraints (constraint_id),
+                    parameter_set_id integer
+                        REFERENCES ParameterSets (parameter_set_id),
+                    parameter_name_id integer
+                        REFERENCES ParameterNames (parameter_name_id),
+                    value float,
+                    svalue char(30));
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'Parameters' created.")
+
+            # create ParameterNames table:
+            query = """\
+                CREATE TABLE ParameterNames(
+                    parameter_name_id integer PRIMARY KEY,
+                    parameter_name char(30));
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'ParameterNames' created.")
+
+            # create Observability table:
+            query = """\
+                CREATE TABLE Observability(
+                    observability_id integer PRIMARY KEY,
+                    field_id integer
+                        REFERENCES Fields (field_id),
+                    parameter_set_id integer
+                        REFERENCES ParameterSets (parameter_set_id),
+                    jd float,
+                    status_id int
+                        REFERENCES ObservabilityStatus (status_id),
+                    setting_duration float,
+                    active bool);
+                """
+
+            self._query(connection, query, commit=True)
+            print("Table 'Observability' created.")
+
+            # create ObservabilityStatus table:
+            query = """\
+                CREATE TABLE ObservabilityStatus(
+                    status_id integer PRIMARY KEY,
+                    status char(14));
+                """
+
+            self._query(connection, query, commit=True)
+            print("Table 'ObservabilityStatus' created.")
+
+            # create ObsWindows table:
+            query = """\
+                CREATE TABLE ObsWindows(
+                    obswindow_id integer PRIMARY KEY,
+                    field_id integer
+                        REFERENCES Fields (field_id),
+                    observability_id int
+                        REFERENCES Observability (observability_id),
+                    date_start date,
+                    date_stop date,
+                    duration float,
+                    active bool);
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'ObsWindows' created.")
+
+            # create TimeRanges table:
+            query = """\
+                CREATE TABLE TimeRanges(
+                    time_range_id integer PRIMARY KEY,
+                    field_id integer
+                        REFERENCES Fields (field_id),
+                    parameter_set_id int
+                        REFERENCES ParameterSets (parameter_set_id),
+                    jd_first float,
+                    jd_next float,
+                    active bool);
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'TimeRanges' created.")
+
+            # create Observations table:
+            query = """\
+                CREATE TABLE Observations(
+                    observation_id integer PRIMARY KEY,
+                    field_id integer
+                        REFERENCES Fields (field_id),
+                    exposure float,
+                    repetitions int,
+                    filter_id int
+                        REFERENCES Filters (filter_id),
+                    scheduled bool,
+                    done bool,
+                    date date);
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'Observations' created.")
+
+            # create Guidestars table:
+            query = """\
+                CREATE TABLE Guidestars(
+                    guidestar_id integer PRIMARY KEY,
+                    field_id integer
+                        REFERENCES Fields (field_id),
+                    ra float,
+                    dec int,
+                    active bool);
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'Guidestars' created.")
+
+            # create Filters table:
+            query = """\
+                CREATE TABLE Filters(
+                    filter_id integer PRIMARY KEY,
+                    filter char(10));
+                """
+            self._query(connection, query, commit=True)
+            print("Table 'Filters' created.")
+
+            # define constraints:
+            query = """\
+                INSERT INTO Constraints (constraint_name)
+                VALUES
+                    ('Twilight'),
+                    ('AirmassLimit'),
+                    ('ElevationLimit'),
+                    ('HourangleLimit'),
+                    ('MoonDistance'),
+                    ('MoonPolarization'),
+                    ('PolyHADecLimit'),
+                    ('SunDistance');
+                """
+            self._query(connection, query, commit=True)
+            print("Constraints added to table 'Constraints'.")
+
+            # define status:
+            query = """\
+                INSERT INTO ObservabilityStatus (status)
+                VALUES
+                    ('init'),
+                    ('not observable'),
+                    ('rising'),
+                    ('plateauing'),
+                    ('setting');
+                """
+            self._query(connection, query, commit=True)
+            print("Statuses added to table 'ObservabilityStatus'.")
+
+        return None
 
     #--------------------------------------------------------------------------
-    def get_filter_id(self, filter_name):
-        """Get the filter ID by the filter name.
-
-        Parameters
-        ----------
-        filter_name : str
-            Filter name.
+    def create(self):
+        """Create sqlite3 database.
 
         Returns
         -------
-        filter_id : int
-            Filter ID.
-
-        Notes
-        -----
-        If the filter name does not exist in the database, the user is asked
-        whether or not to add it.
+        create : bool
+            True, if a new database file was created. False, otherwise.
         """
 
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                SELECT filter_id, filter
-                FROM Filters
-                WHERE filter='{0}';
-                """.format(filter_name)
-            results = self._query(connection, query).fetchall()
+        create = False
 
-        if len(results) == 0:
-            userin = input(
-                    f"Filter '{filter_name} does not exist. Add it to data " \
-                    "base? (y/n)")
+        # check if file exists:
+        if self._db_exists(verbose=0):
+            answer = input(
+                'Database file exists. Overwrite (y) or cancel (enter)?')
 
-            if userin.lower() in ['y', 'yes', 'make it so!']:
-                filter_id = self._add_filter(filter_name)
-            else:
-                filter_id = False
+            if answer.lower() in ['y', 'yes', 'make it so!']:
+                os.system(f'rm {self.db_file}')
+                create = True
 
         else:
-            filter_id = results[0][0]
+            create = True
 
-        return filter_id
+        # create file:
+        if create:
+            self._create()
+            print('Database creation finished.')
+            print('\nNote: Next you need to add observatories, constraints, '
+                  'fields, guidestars, and observations.')
+
+        else:
+            print(f"Existing database '{self.db_file}' kept.")
+
+        return create
 
     #--------------------------------------------------------------------------
-    def get_observations(self, field_id, exposure, repetitions, filter_id):
-        """Query an observation from the database.
+    def add_telescope(self, name, lat, lon, height, utc_offset):
+        """Add telescope to database.
 
         Parameters
         ----------
-        field_id : int
-            ID of the associated field.
-        exposure : float
-            Exposure time in seconds.
-        repetitions : int
-            Number of repetitions.
-        filter_id : int
-            Filter ID.
+        name : str
+            Telescope name. Must be a unique identifier in the database.
+        lat : float
+            Telescope latitude in radians.
+        lon : float
+            Telescope longitude in radians.
+        height : float
+            Telescope height in meters.
+        utc_offset : int
+            Telescope UTC offset (daylight saving time).
 
         Returns
         -------
-        results : list of tuples
-            The list is empty if no observation was found. Otherwise, the list
-            contains one tuple. The tuple contains the observation ID, field
-            ID, exposure time in seconds, number of repetitions, filter_id,
-            its scheduling status, its observation status, the datetime of
-            the observation if it was finished.
+        None
         """
 
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                SELECT *
-                FROM Observations
-                WHERE (
-                    field_id={0} AND exposure={1} AND repetitions={2}
-                    AND filter_id={3});
-                """.format(field_id, exposure, repetitions, filter_id)
-            results = self._query(connection, query).fetchall()
+        manager = TelescopeManager(self.db_file)
+        manager.add_telescope(name, lat, lon, height, utc_offset)
 
-        return results
+    #--------------------------------------------------------------------------
+    def add_constraints(self, telescope, twilight, constraints=()):
+        """Add constraints to database.
+
+        Parameters
+        ----------
+        telescope : str
+            Name of the telescope that the constraints are associated with.
+        twilight : float or str
+            If str, must be 'astronomical' (-18 deg), 'nautical' (-12 deg),
+            'civil' (-6 deg), or 'sunset' (0 deg). Use float otherwise.
+        constraints : list or tuple of constraints.Constraint, optional
+            The constraints to be added to the database for the specified
+            telescope. The default is ().
+
+        Returns
+        -------
+        None
+        """
+
+        manager = TelescopeManager(self.db_file)
+        manager.add_constraints(telescope, twilight, constraints=constraints)
+
+    #--------------------------------------------------------------------------
+    def add_fields(self, fields, telescope, active=True, n_batch=1000):
+        """Add fields to the database.
+
+        Parameters
+        ----------
+        fields : fieldgrid.FieldGrid
+            The fields to add.
+        telescope : str
+            Name of the telescope associated with the fields.
+        active : bool, optional
+            If True, fields are added as active, and as inactive otherwise. The
+            default is True.
+        n_batch : int, optinal
+            Add fields in batches of this size to the data base. The default is
+            1000.
+
+        Returns
+        -------
+        None
+        """
+
+        manager = FieldManager(self.db_file)
+        manager.add_fields(fields, telescope, active=active, n_batch=n_batch)
+
+    #--------------------------------------------------------------------------
+    def add_guidestars(
+            self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
+            warn_sep=0):
+        """Add new guidestars to the database.
+
+        Parameters
+        ----------
+        field_ids : int or list of int
+            IDs of the fields that the guidestar coordinates correspond to.
+        ras : float or list of float
+            Guidestar right ascensions in rad.
+        decs : float or list of floats
+            Guidestar declinations in rad.
+        warn_missing : bool, optional
+            If True, warn about fields that do not have any associated
+            guidestars stored in the database. The default is True.
+        warn_rep : float or astopy.coord.Angle, optional
+            If a float or Angle larger than 0 is given, the user is warned
+            about new guidestars that may be duplicates of existing entries in
+            the database. The value in `warn_rep` is the largest separation
+            allowed not to be considered a duplicate. A float is interpreted as
+            angle in rad. The default is 0.
+        warn_sep : float or astopy.coord.Angle, optional
+            If a float or Angle larger than 0 is given, the user is warned
+            about new guidestars that may be too far off from the corresponding
+            field center. The value in `warn_sep` is the largest separation
+            allowed. A float is interpreted as angle in rad. The default is 0.
+
+        Returns
+        -------
+        None
+        """
+
+        manager = GuidestarManager(self.db_file)
+        manager.add_guidestar(
+                field_ids, ra, dec, warn_missing=warn_missing,
+                warn_rep=warn_rep, warn_sep=warn_sep)
 
     #--------------------------------------------------------------------------
     def add_observations(
             self, exposure, repetitions, filter_name, field_id=None,
-            observatory=None):
+            telescope=None):
         """Add observation to database.
 
         Parameters
@@ -2593,10 +2645,10 @@ class DBConnectorSQLite:
         field_id : int or list of int, optional
             ID(s) of the associated field(s). If None, the same observation is
             added to all active fields. The default is None.
-        observatory : str, optional
+        telescope : str, optional
             If field_id is None, this argument can be used to add observations
             only to those fields that are associated to the specified
-            observatory. Otherwise, observations are added to all active
+            telescope. Otherwise, observations are added to all active
             fields. The default is None.
 
         Returns
@@ -2604,154 +2656,9 @@ class DBConnectorSQLite:
         None
         """
 
-        # prepare field IDs:
-        if field_id is None:
-            field_id = [field[0] for field in
-                        self.get_fields(observatory=observatory, active=True)]
-        elif isinstance(field_id, int):
-            field_id = [field_id]
-        elif isinstance(field_id, list):
-            pass
-        else:
-            raise ValueError(
-                    "'field_id' needs to be int, list of int, or None.")
-
-        n_fields = len(field_id)
-
-        # prepare exposures:
-        if type(exposure) in [float, int]:
-            exposure = float(exposure)
-            exposure = [exposure for __ in range(n_fields)]
-        elif isinstance(exposure, list):
-            if len(exposure) != n_fields:
-                raise ValueError(
-                        "'exposures' list need to be of the same length as " \
-                        "'field_id'.")
-        else:
-            raise ValueError("'exposure' needs to be float or list of floats.")
-
-        # prepare repetitions:
-        if isinstance(repetitions, int):
-            repetitions = [repetitions for __ in range(n_fields)]
-        elif isinstance(repetitions, list):
-            if len(repetitions) != n_fields:
-                raise ValueError(
-                        "'repetitions' list need to be of the same length " \
-                        "'as field_id'.")
-        else:
-            raise ValueError("'repetitions' needs to be int or list of int.")
-
-        # prepare filters:
-        if isinstance(filter_name, str):
-            filter_name = [filter_name for __ in range(n_fields)]
-        elif isinstance(filter_name, list):
-            if len(filter_name) != n_fields:
-                raise ValueError(
-                        "'filter_name' list need to be of the same length " \
-                        "'as field_id'.")
-        else:
-            raise ValueError("'filter_name' needs to be str or list of str.")
-
-        check_existence = True
-        skip_existing = False
-        filter_ids = {}
-        data = []
-
-        # prepare entries for adding:
-        for field, exp, rep, filt in zip(
-                field_id, exposure, repetitions, filter_name):
-            # check if filter exists:
-            if filt not in filter_ids.keys():
-                filter_id = self.get_filter_id(filt)
-
-                # stop, if the filter did not exist and was not added:
-                if filter_id is False:
-                    print("Filter was not added to database. No " \
-                          "observations are added either.")
-                    return False
-
-                filter_ids[filt] = filter_id
-
-            # check if observation entry exists:
-            if check_existence:
-                observations = self.get_observations(
-                        field, exp, rep, filter_ids[filt])
-                n_obs = len(observations)
-                n_done = len([1 for obs in observations if obs[6]])
-
-                if n_obs > n_done and skip_existing:
-                    continue
-                elif n_obs:
-                    userin = input(
-                            f"{n_obs} observation(s) with the same " \
-                            "parameters already exist in data base. " \
-                            f"{n_done} out of those are finished. Add new " \
-                            "observation anyway? (y/n, 'ALL' to add all " \
-                            "following without asking, or 'NONE' to skip " \
-                            "all existing observations that have not been " \
-                            "finished).")
-
-                    if userin.lower() in ['y', 'yes', 'make it so!']:
-                        pass
-                    elif userin == 'ALL':
-                        check_existence = False
-                    elif userin == 'NONE':
-                        skip_existing = True
-                        continue
-                    else:
-                        continue
-
-            # add to data:
-            data.append((field, exp, rep, filter_ids[filt], False, False))
-
-        # add to data base:
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO Observations (
-                    field_id, exposure, repetitions, filter_id, scheduled,
-                    done)
-                VALUES (?, ?, ?, ?, ?, ?);
-                """
-            self._query(connection, query, many=data, commit=True)
-
-        n_obs = len(data)
-        print(f"{n_obs} observations added to data base.")
-
-    #--------------------------------------------------------------------------
-    def set_observed(
-            self, observation_id=None, field_id=None, exposure=None,
-            repetitions=None, filter_name=None, date=None):
-        """Mark an observation as finished. Select observation either by its ID
-        or by its parameters.
-
-        Parameters
-        ----------
-        observation_id : int or list of ints or None
-            Observation ID(s) that should be marked as observed. If None, the
-            other arguments must be set to idenfy the observation(s). The
-            default is None.
-        field_id : int or list of ints
-            Field ID. The default is None.
-        exposure : float or list of floats
-            Exposure time in seconds. The default is None.
-        repetitions : int or list of ints
-            Number of repetitions. The default is None.
-        filter_name : str or list of str
-            Filter name. The default is None.
-        date : astropy.time.Time or list therof, optional
-            Date and time of the observation. If not provided, the current
-            time when the observation is marked as observed is stored. The
-            default is None.
-
-        Returns
-        -------
-        None
-        """
-
-        if observation_id is None:
-            self._set_observed_by_params(
-                    field_id, exposure, repetitions, filter_name, date=date)
-        else:
-            self._set_observed_by_id(observation_id, date=date)
+        manager = ObservationManager(self.db_file)
+        manager.add_observations(
+                exposure, repetitions, filter_name, field_id=field_id,
+                telescope=telescope)
 
 #==============================================================================

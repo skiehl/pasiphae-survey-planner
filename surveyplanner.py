@@ -9,17 +9,13 @@ from itertools import repeat
 from multiprocessing import Manager, Pool, Process
 import numpy as np
 from pandas import DataFrame
-from scipy.stats import linregress
 from statsmodels.api import add_constant, OLS
 from time import sleep
 from textwrap import dedent
-from warnings import warn
 
 import constraints as c
-from db import DBConnectorSQLite
+from db import FieldManager, ObservabilityManager, TelescopeManager
 from utilities import true_blocks
-
-import sys
 
 __author__ = "Sebastian Kiehlmann"
 __credits__ = ["Sebastian Kiehlmann"]
@@ -394,7 +390,7 @@ class Telescope:
         utc_offset : float
             The local UTC offset in hours.
         name : str, default=''
-            Name of the telescope/observatory.
+            Name of the telescope/telescope.
         telescope_id : int
             ID in the database.
 
@@ -598,14 +594,14 @@ class SurveyPlanner:
         self.twilight = None
 
     #--------------------------------------------------------------------------
-    def _setup_observatory(self, observatory, no_constraints=False):
+    def _setup_telescope(self, telescope_name, no_constraints=False):
         """Load telescope parameters from database and add Telescope instance
         to SurveyPlanner.
 
         Parameters
         ----------
-        observatory : str
-            Observatory name as stored in the database.
+        telescope_name : str
+            Telescope name as stored in the database.
         no_constraints : bool, optional
             If True, no constraints are loaded from the database and added to
             the telescope. The default is False.
@@ -617,22 +613,22 @@ class SurveyPlanner:
         """
 
         # connect to database:
-        db = DBConnectorSQLite(self.dbname)
+        db = TelescopeManager(self.dbname)
 
         # create telescope:
-        telescope = db.get_observatory(observatory)
+        telescope = db.get_telescope(telescope_name)
         self.telescope = Telescope(
                 telescope['lat'], telescope['lon'], telescope['height'],
                 telescope['utc_offset'], name=telescope['name'])
 
         # load twilight, but skip loading other constraints:
         if no_constraints:
-            parameter_set_id, constraints = db.get_constraints(observatory)
+            parameter_set_id, constraints = db.get_constraints(telescope_name)
             self.twilight = constraints['Twilight']['twilight']
             return None
 
         # read constraints:
-        parameter_set_id, constraints = db.get_constraints(observatory)
+        parameter_set_id, constraints = db.get_constraints(telescope_name)
         self.twilight = constraints['Twilight']['twilight']
         del constraints['Twilight']
 
@@ -716,13 +712,13 @@ class SurveyPlanner:
         return obs_windows
 
     #--------------------------------------------------------------------------
-    def _iter_fields(self, observatory=None, active=True):
+    def _iter_fields(self, telescope=None, active=True):
         """Connect to database and iterate through fields.
 
         Parameters
         ----------
-        observatory : str, optional
-            Iterate only through fields associated with this observatory name.
+        telescope : str, optional
+            Iterate only through fields associated with this telescope name.
             Otherwise, iterate through all fields. The default is None.
         active : bool, optional
             If True, only iterate through active fields. If False, only iterate
@@ -737,7 +733,7 @@ class SurveyPlanner:
 
         # read fields from database:
         db = DBConnectorSQLite(self.dbname)
-        fields = db.iter_fields(observatory=observatory, active=active)
+        fields = db.iter_fields(telescope=telescope, active=active)
 
         for __, __, field in fields:
             field = self._tuple_to_field(field)
@@ -746,15 +742,15 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _iter_observable_fields_by_night(
-            self, observatory, night, observed=None, pending=None,
+            self, telescope, night, observed=None, pending=None,
             active=True):
         """Iterate through fields observable during a given night, given
         specific selection criteria.
 
         Parameters
         ----------
-        observatory : str
-            Observatory name.
+        telescope : str
+            Telescope name.
         night : astropy.time.Time
             Iterate through fields observable during the night that starts on
             the specified day. Time information is truncated.
@@ -790,10 +786,10 @@ class SurveyPlanner:
         # connect to database:
         db = DBConnectorSQLite(self.dbname)
 
-        # get observatory information:
-        observatory_name = observatory
-        observatory = db.get_observatory(observatory)
-        utc_offset = observatory['utc_offset'] * u.h
+        # get telescope information:
+        telescope_name = telescope
+        telescope = db.get_telescope(telescope)
+        utc_offset = telescope['utc_offset'] * u.h
 
         # get local noon of current and next day in UTC:
         noon_current = night + 12 * u.h - utc_offset
@@ -802,7 +798,7 @@ class SurveyPlanner:
 
         # iterate through fields:
         for __, __, field in db.iter_fields(
-                observatory=observatory_name, observed=observed,
+                telescope=telescope_name, observed=observed,
                 pending=pending, active=active):
             field_id = field[0]
             obs_windows = db.get_obs_windows_from_to(
@@ -822,15 +818,15 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _iter_observable_fields_by_datetime(
-            self, observatory, datetime, observed=None, pending=None,
+            self, telescope, datetime, observed=None, pending=None,
             active=True):
         """Iterate through fields observable during a given night, given
         specific selection criteria.
 
         Parameters
         ----------
-        observatory : str
-            Observatory name.
+        telescope : str
+            Telescope name.
         datetime : astropy.time.Time
             Iterate through fields that are observable at the given time.
         observed : bool or None, optional
@@ -857,11 +853,11 @@ class SurveyPlanner:
 
         # connect to database:
         db = DBConnectorSQLite(self.dbname)
-        observatory_name = observatory
+        telescope_name = telescope
 
         # iterate through fields:
         for __, __, field in db.iter_fields(
-                observatory=observatory_name, observed=observed,
+                telescope=telescope_name, observed=observed,
                 pending=pending, active=active):
             field_id = field[0]
             obs_windows = db.get_obs_windows_by_datetime(
@@ -1370,15 +1366,13 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _add_obs_windows(
-            self, db, fields, init, observatory, date_stop, date_start,
+            self, fields, init, telescope_name, date_stop, date_start,
             duration_limit, batch_write, processes, time_interval_init,
             time_interval_refine, agreed_to_gaps):
         """
 
         Parameters
         ----------
-        db : db.DBConnectorSQLite
-            Active database connection.
         fields list of tuples
             List of the queried fields. Each tuple contains the field
             parameters.
@@ -1386,8 +1380,8 @@ class SurveyPlanner:
             If True, observing windows are calculated for these fields for the
             first time, which requires some additional action. Otherwise, new
             observing windows are appended.
-        observatory dict
-            The telescope parameters as stored in the database.
+        telescope_name : str
+            Telescope name as stored in the database.
         date_stop : astropy.time.Time
             The date until which observing windows should be calculated.
         date_start : astropy.time.Time
@@ -1431,6 +1425,7 @@ class SurveyPlanner:
         """
 
         n_fields = len(fields)
+        db = ObservabilityManager(self.dbname)
 
         # print out some information:
         if n_fields and init:
@@ -1448,8 +1443,8 @@ class SurveyPlanner:
         else:
             return None
 
-        # setup observatory with constraints:
-        parameter_set_id = self._setup_observatory(observatory)
+        # setup telescope with constraints:
+        parameter_set_id = self._setup_telescope(telescope_name)
 
         # get time range for observing window calculation:
         if init:
@@ -1505,14 +1500,9 @@ class SurveyPlanner:
         return agreed_to_gaps
 
     #--------------------------------------------------------------------------
-    def _get_fields_missing_status(self, db):
+    def _get_fields_missing_status(self):
         """Get fields that have associated observing windows without
         observability status information.
-
-        Parameters
-        ----------
-        db : db.DBConnectorSQLite
-            Active database connection.
 
         Returns
         -------
@@ -1530,6 +1520,7 @@ class SurveyPlanner:
         - This method is called by `_add_status()`
         """
 
+        db = FieldManager(self.dbname)
         fields = db.get_fields_missing_status()
         fields = DataFrame(fields, columns=('field_id', 'jd'))
         fields = fields.groupby('field_id').agg(
@@ -1879,15 +1870,13 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _add_status(
-            self, db, days_before, days_after, outlier_threshold,
+            self, days_before, days_after, outlier_threshold,
             status_threshold, time_interval, batch_write=10000, processes=1):
         """Determine the observability status for each field for each day and
         save it in the database.
 
         Parameters
         ----------
-        db : db.DBConnectorSQLite
-            Active database connection.
         days_before : int
             Determining the field's status requires the analysis of observation
             windows in a time range. This arguments sets how many days before
@@ -1926,7 +1915,8 @@ class SurveyPlanner:
           processes.
         """
 
-        field_ids, jds_min, jds_max = self._get_fields_missing_status(db)
+        db = ObservabilityManager(self.dbname)
+        field_ids, jds_min, jds_max = self._get_fields_missing_status()
         jds_before = jds_min - days_before
         jds_after = jds_max + days_after
         n_fields = field_ids.shape[0]
@@ -1958,15 +1948,15 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def iter_observable_fields(
-            self, observatory, night=None, datetime=None, observed=None,
+            self, telescope, night=None, datetime=None, observed=None,
             pending=None, active=True):
         """Iterate through fields observable during a given night or at a
         specific time, given specific selection criteria.
 
         Parameters
         ----------
-        observatory : str
-            Observatory name.
+        telescope : str
+            Telescope name.
         night : astropy.time.Time, optional
             Iterate through fields observable during the night that starts on
             the specified day. Time information is truncated. Either set this
@@ -2000,12 +1990,12 @@ class SurveyPlanner:
         # check input:
         if night is not None:
             return self._iter_observable_fields_by_night(
-                    observatory, night, observed=observed, pending=pending,
+                    telescope, night, observed=observed, pending=pending,
                     active=active)
 
         elif datetime is not None:
             return self._iter_observable_fields_by_datetime(
-                    observatory, datetime, observed=observed, pending=pending,
+                    telescope, datetime, observed=observed, pending=pending,
                     active=active)
 
         else:
@@ -2014,15 +2004,15 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def get_observable_fields(
-            self, observatory, night=None, datetime=None, observed=None,
+            self, telescope, night=None, datetime=None, observed=None,
             pending=None, active=True):
         """Get a list of fields observable during a given night or at a
         specific time, given specific selection criteria.
 
         Parameters
         ----------
-        observatory : str
-            Observatory name.
+        telescope : str
+            Telescope name.
         night : astropy.time.Time, optional
             Iterate through fields observable during the night that starts on
             the specified day. Time information is truncated. Either set this
@@ -2054,19 +2044,19 @@ class SurveyPlanner:
         """
 
         observable_fields = [field for field in self.iter_observable_fields(
-                observatory, night=night, datetime=datetime, observed=observed,
+                telescope, night=night, datetime=datetime, observed=observed,
                 pending=pending, active=active)]
 
         return observable_fields
 
     #--------------------------------------------------------------------------
-    def get_night_start_end(self, observatory, datetime):
+    def get_night_start_end(self, telescope, datetime):
         """Get the start and stop time of a night for a given date.
 
         Parameters
         ----------
-        observatory : str
-            Observatory name as stored in the database.
+        telescope : str
+            Telescope name as stored in the database.
         datetime : astropy.time.Time
             The night starting on that date is considered. Time information is
             truncated.
@@ -2089,7 +2079,7 @@ class SurveyPlanner:
         month = datetime.month
         day = datetime.day
 
-        self._setup_observatory(observatory, no_constraints=True)
+        self._setup_telescope(telescope, no_constraints=True)
         night_start, night_stop = self.telescope.get_sun_set_rise(
                 year, month, day, self.twilight)
 
@@ -2097,15 +2087,15 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def iter_fields(
-            self, observatory=None, observed=None, pending=None, active=True):
+            self, telescope=None, observed=None, pending=None, active=True):
         """Iterate through fields, given specific selection criteria.
 
         Parameters
         ----------
-        observatory : str, optional
-            Iterate only through fields associated with this observatory.
+        telescope : str, optional
+            Iterate only through fields associated with this telescope.
             If None, iterate through all fields irregardless of the associated
-            observatory.
+            telescope.
         observed : bool or None, optional
             If True, iterate only through fields that have been observed at
             least once. If False, iterate only through fields that have never
@@ -2132,20 +2122,20 @@ class SurveyPlanner:
         db = DBConnectorSQLite(self.dbname)
 
         for field in db.get_fields(
-                observatory=observatory, observed=observed, pending=pending,
+                telescope=telescope, observed=observed, pending=pending,
                 active=active):
             yield self._tuple_to_field(field)
 
     #--------------------------------------------------------------------------
     def get_fields(
-            self, observatory=None, observed=None, pending=None, active=True):
+            self, telescope=None, observed=None, pending=None, active=True):
         """Get a list of fields, given specific selection criteria.
 
         Parameters
         ----------
-        observatory : str, optional
-            Only get fields associated with this observatory. If None, get all
-            fields irregardless of the associated observatory.
+        telescope : str, optional
+            Only get fields associated with this telescope. If None, get all
+            fields irregardless of the associated telescope.
         observed : bool or None, optional
             If True, only get fields that have been observed at least once. If
             False, only get fields that have never been observed. If None, get
@@ -2167,7 +2157,7 @@ class SurveyPlanner:
         """
 
         fields = [field for field in self.iter_fields(
-                observatory=observatory, observed=observed, pending=pending,
+                telescope=telescope, observed=observed, pending=pending,
                 active=active)]
 
         return fields
@@ -2238,7 +2228,7 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def iter_field_ids_in_circles(
-            self, circle_center, radius, observatory=None, observed=None,
+            self, circle_center, radius, telescope=None, observed=None,
             pending=None, active=True):
         """Iterate through different circle center locations and yield the IDs
         of fields located in those circles.
@@ -2250,9 +2240,9 @@ class SurveyPlanner:
             multiple coordinates can be provided in a SkyCoord instance.
         radius : astropy.units.Quantity
             The circle radius in deg or rad.
-        observatory : str, optional
-            Only count fields associated with this observatory. If None, count
-            all fields irregardless of the associated observatory.
+        telescope : str, optional
+            Only count fields associated with this telescope. If None, count
+            all fields irregardless of the associated telescope.
         observed : bool or None, optional
             If True, only count fields that have been observed at least once.
             If False, only count fields that have never been observed. If None,
@@ -2296,7 +2286,7 @@ class SurveyPlanner:
         fields_dec = []
 
         for field in self.iter_fields(
-                observatory=observatory, observed=observed, pending=pending,
+                telescope=telescope, observed=observed, pending=pending,
                 active=active):
 
             fields_id.append(field.id)
@@ -2422,22 +2412,27 @@ class SurveyPlanner:
         print('Calculate observing windows until {0}..'.format(
                 date_stop.iso[:10]))
 
-        # connect to database:
-        db = DBConnectorSQLite(self.dbname)
+        # get telescopes from database:
+        telescope_manager = TelescopeManager(self.dbname)
+        telescope_names = telescope_manager.get_telescope_names()
+        n_tel = len(telescope_names)
+        del telescope_manager
+
         jd_stop = date_stop.jd
         agreed_to_gaps = None
 
         # iterate through observatories:
-        for i, m, observatory in db.iter_observatories():
-            observatory_name = observatory['name']
-            print(f'\nObservatory {i+1} of {m} selected: {observatory_name}')
+        for i, telescope_name in enumerate(telescope_names, start=1):
+            print(f'\nTelescope {i} of {n_tel} selected: {telescope_name}')
 
             # get fields that need observing window calculations:
             print('Query fields..')
-            fields_init = db.get_fields(
-                    observatory=observatory_name, init_obs_windows=True)
-            fields_tbd = db.get_fields(
-                    observatory=observatory_name, needs_obs_windows=jd_stop)
+            field_manager = FieldManager(self.dbname)
+            fields_init = field_manager.get_fields(
+                    telescope=telescope_name, init_obs_windows=True)
+            fields_tbd = field_manager.get_fields(
+                    telescope=telescope_name, needs_obs_windows=jd_stop)
+            del field_manager
 
             with Pool(processes=processes) as pool:
                     fields_init = pool.map(self._tuple_to_field, fields_init)
@@ -2445,25 +2440,25 @@ class SurveyPlanner:
 
             # calculate observing windows for new fields:
             agreed_to_gaps = self._add_obs_windows(
-                    db, fields_init, True, observatory_name, date_stop,
+                    fields_init, True, telescope_name, date_stop,
                     date_start, duration_limit, batch_write, processes,
                     time_interval_init, time_interval_refine, agreed_to_gaps)
 
             # calculate observing windows for fields:
             agreed_to_gaps = self._add_obs_windows(
-                    db, fields_tbd, False, observatory_name, date_stop,
+                    fields_tbd, False, telescope_name, date_stop,
                     date_start, duration_limit, batch_write, processes,
                     time_interval_init, time_interval_refine, agreed_to_gaps)
 
         # determine observability status for each field for each day:
         self._add_status(
-                db, days_before, days_after, outlier_threshold,
+                days_before, days_after, outlier_threshold,
                 status_threshold, time_interval_refine,
                 batch_write=batch_write, processes=processes)
 
     #--------------------------------------------------------------------------
     def count_neighbors(
-            self, radius, field_ids, observatory=None, observed=None,
+            self, radius, field_ids, telescope=None, observed=None,
             pending=None, active=True):
         """Count the neighbors of specificied fields given various criteria.
 
@@ -2475,9 +2470,9 @@ class SurveyPlanner:
         field_ids : int or list
             ID of the field whose neighbors are searched for. Or list of
             multiple such IDs.
-        observatory : str, optional
-            Only count fields associated with this observatory. If None, count
-            all fields irregardless of the associated observatory.
+        telescope : str, optional
+            Only count fields associated with this telescope. If None, count
+            all fields irregardless of the associated telescope.
         observed : bool or None, optional
             If True, only count fields that have been observed at least once.
             If False, only count fields that have never been observed. If None,
@@ -2523,7 +2518,7 @@ class SurveyPlanner:
         n_neighbors = np.zeros(len(field_ids), dtype=int)
 
         for i, neighbor_ids in enumerate(self.iter_field_ids_in_circles(
-                fields_coord, radius, observatory=observatory,
+                fields_coord, radius, telescope=telescope,
                 observed=observed, pending=pending, active=active)):
 
             n_neighbors[i] = neighbor_ids.shape[0]
@@ -2561,7 +2556,7 @@ class Prioritizer:
 
     #--------------------------------------------------------------------------
     def _prioritize_by_sky_coverage(
-            self, fields, radius, observatory=None, normalize=False):
+            self, fields, radius, telescope=None, normalize=False):
         """Assign priority based on sky coverage.
 
         Parameters
@@ -2571,10 +2566,10 @@ class Prioritizer:
         radius : astropy.units.Quantity
             Radius in which to count field neighbors. Needs to be a Quantity
             with unit 'rad' or 'deg'.
-        observatory : str, optional
-            Only fields associated with this observatory are taken into
+        telescope : str, optional
+            Only fields associated with this telescope are taken into
             consideration. If None, all fields are considered irregardless of
-            the associated observatory.
+            the associated telescope.
         normalize : bool, optional
             If True, all priorities are scaled such that the highest priority
             has a value of 1.
@@ -2602,12 +2597,12 @@ class Prioritizer:
 
         # count all neighboring fields for each given field:
         count_all = self.surveyplanner.count_neighbors(
-                radius, field_ids, observatory=observatory)
+                radius, field_ids, telescope=telescope)
         count_all = np.array(count_all)
 
         # count finished neighboring fields for each given field:
         count_finished = self.surveyplanner.count_neighbors(
-                radius, field_ids, pending=False, observatory=observatory)
+                radius, field_ids, pending=False, telescope=telescope)
         count_finished = np.array(count_finished)
 
         # calculate priority:
@@ -2695,7 +2690,7 @@ class Prioritizer:
     def prioritize(
             self, fields, weight_coverage=0., weight_rising=0.,
             weight_plateauing=0., weight_setting=0., normalize=False,
-            coverage_radius=None, coverage_observatory=None,
+            coverage_radius=None, coverage_telescope=None,
             coverage_normalize=False, return_priorities=False):
         """Assign a priority to each field.
 
@@ -2717,10 +2712,10 @@ class Prioritizer:
         coverage_radius : astropy.units.Quantity
             Radius in which to count field neighbors. Needs to be a Quantity
             with unit 'rad' or 'deg'. Required if `weight_coverage` is given.
-        coverage_observatory : str, optional
-            Only fields associated with this observatory are taken into
+        coverage_telescope : str, optional
+            Only fields associated with this telescope are taken into
             consideration for calculation of the sky coverage. If None, all
-            fields are considered irregardless of the associated observatory.
+            fields are considered irregardless of the associated telescope.
             Only has an effect, when `weight_coverage` is given.
         coverage_normalize : bool, optional
             If True, priorities are scaled such that the highest priority
@@ -2780,7 +2775,7 @@ class Prioritizer:
         if weight_coverage:
             priority = self._prioritize_by_sky_coverage(
                     fields, coverage_radius,
-                    observatory=coverage_observatory,
+                    telescope=coverage_telescope,
                     normalize=coverage_normalize)
             priorities.append(priority)
             weights.append(weight_coverage)
