@@ -9,6 +9,7 @@ from math import ceil
 import numpy as np
 import os
 import sqlite3
+from textwrap import dedent
 import warnings
 
 from fieldgrid import FieldGrid
@@ -862,7 +863,7 @@ class TelescopeManager(DBManager):
         return telescope_names
 
     #--------------------------------------------------------------------------
-    def get_telescope(self, name=None):
+    def get_telescopes(self, name=None, constraints=False):
         """Get telescope(s) from database.
 
         Parameters
@@ -870,6 +871,10 @@ class TelescopeManager(DBManager):
         name : str, optional
             telescope name. If none is given, all telescopes are returned
             as list of dict. The default is None.
+        constraints : bool or str, optional
+            If True, add active constraints to the telescope dict.
+            If 'all', add all parameter sets associated with the telescope to
+            the telescope dict.
 
         Returns
         -------
@@ -880,6 +885,7 @@ class TelescopeManager(DBManager):
         """
         # TODO: add option to include constraints in returned dict
 
+        # define SQL WHERE conditions:
         if name is None:
             where_clause = ""
         elif isinstance(name, str):
@@ -887,6 +893,7 @@ class TelescopeManager(DBManager):
         else:
             raise ValueError("`name` must be str or None.")
 
+        # query telescope(s) from database:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 SELECT *
@@ -895,16 +902,32 @@ class TelescopeManager(DBManager):
                 """.format(where_clause)
             results = self._query(connection, query).fetchall()
 
+        # parse to dictionaries:
         telescopes = []
 
         for result in results:
+            telescope_id = result[0]
+            telescope_name = result[1]
+            lat = result[2] * u.rad
+            lon = result[3] * u.rad
+            height = result[4]
+            utc_offset = result[5]
+
+            # store telescope info:
             telescope = {
-                'telescope_id': result[0],
-                'name': result[1],
-                'lat': result[2] * u.rad,
-                'lon': result[3] * u.rad,
-                'height': result[4],
-                'utc_offset': result[5]}
+                'telescope_id': telescope_id, 'name': telescope_name,
+                'lat': lat, 'lon': lon, 'height': height,
+                'utc_offset': utc_offset}
+
+            if isinstance(constraints, str) and constraints.lower() == 'all':
+                parameter_sets = self.get_constraints(
+                        telescope=telescope_name, active=False)
+                telescope['parameter_sets'] = parameter_sets
+            elif constraints:
+                parameter_set = self.get_constraints(
+                        telescope=telescope_name, active=True)
+                telescope['constraints'] = parameter_set['constraints']
+
             telescopes.append(telescope)
 
         if name is not None:
@@ -913,82 +936,209 @@ class TelescopeManager(DBManager):
         return telescopes
 
     #--------------------------------------------------------------------------
-    def get_constraints(self, telescope):
+    def get_constraints(self, telescope=None, active=True):
         """Query constraints associated with a specified telescope from the
         database
 
         Parameters
         ----------
-        telescope : str
-            Name of the telescope.
+        telescope : str, optional
+            Name of the telescope. If None is given, constraints for all
+            telescopes are returned. The default is None
+        active : bool or None
+            If True, only active constraints are returned. If False,
+            constraints are returned regardless of whether they are active or
+            not. The default is True.
 
         Raises
         ------
         NotInDatabase
-            Raised if no parameter set is stored for the specified telescope.
+            Raised if no parameter set is stored for the specified conditions.
 
         Returns
         -------
-        parameter_set_id : int
-            Parameter set ID corresponding to the constraints.
-        constraints : dict of dict
-            Dictionary of the constraints. The keys are the constraint names.
-            The values are dictionaries that contain the constraint parameter
-            names as keys and associated values.
+        parameter_sets : dict or list
+            If telescope is specified and active is True, a dict is returned.
+            Otherwise, a list of dicts. The dict contains the parameter set ID,
+            telescope name, whether the set is active or not, and a dict of
+            constraints, which is structured as following. The keys are the
+            constraint names. The values are dictionaries that contain the
+            constraint parameter names as keys and associated values.
 
         Notes
         -----
-        This method calls `get_telescope_id()`, `_get_parameter_set_id()`, and
-        `_query()`.
+        This method calls `_query()`.
         """
-
-        telescope_id = self.get_telescope_id(telescope)
-        parameter_set_id = self._get_parameter_set_id(telescope_id)
-
-        # no parameter set exists:
-        if parameter_set_id == -1:
-            raise NotInDatabase(
-                "No active parameter set stored for telescope "
-                f"'{telescope}'.")
 
         # query constraints and parameter values:
         with SQLiteConnection(self.db_file) as connection:
+            # define SQL WHERE conditions:
+            if telescope and active:
+                where_clause = \
+                        f"WHERE(t.name = '{telescope}' AND ps.active = TRUE)"
+            elif telescope:
+                where_clause = f"WHERE(t.name = '{telescope}')"
+            elif active:
+                where_clause = "WHERE(ps.active = TRUE)"
+            else:
+                where_clause = ""
+
             query = """\
-                SELECT c.constraint_name, pn.parameter_name, p.value, p.svalue
+                SELECT ps.parameter_set_id, pn.parameter_name, p.value,
+                    p.svalue, c.constraint_name, t.name, ps.active
                 FROM Parameters p
                 LEFT JOIN ParameterNames pn
                     ON p.parameter_name_id = pn.parameter_name_id
                 LEFT JOIN Constraints c
                     ON p.constraint_id = c.constraint_id
-                WHERE p.parameter_set_id = {0}
-                """.format(parameter_set_id)
-            result = self._query(connection, query).fetchall()
+                LEFT JOIN ParameterSets ps
+                	ON p.parameter_set_id = ps.parameter_set_id
+                LEFT JOIN Telescopes t
+                	ON ps.telescope_id = t.telescope_id
+                {0}
+                """.format(where_clause)
+            results = self._query(connection, query).fetchall()
 
-        # parse to dictionary:
+        # no parameter set exists:
+        if telescope and active and not results:
+            raise NotInDatabase(
+                "No active constraints stored for telescope "
+                f"'{telescope}'.")
+        elif telescope and not results:
+            raise NotInDatabase(
+                f"No constraints stored for telescope '{telescope}'.")
+        elif active and not results:
+            raise NotInDatabase("No active constraints stored.")
+        elif not results:
+            raise NotInDatabase("No constraints stored.")
+
+        # parse to dictionaries:
+        parameter_sets = []
+        parameter_set = {}
         constraints = {}
+        counter = 1
 
-        for r in result:
-            constraint_name = r[0]
-            param_name = r[1]
-            value = r[2]
-            svalue = r[3]
+        for i, result in enumerate(results):
+            parameter_set_id = result[0]
+            parameter_name = result[1]
+            value = result[2]
+            svalue = result[3]
+            constraint_name = result[4]
+            telescope_name = result[5]
+            active_set = bool(result[6])
 
+            if i == 0:
+                counter = parameter_set_id
+
+            # if parameter set ID increases, add set and start new one
+            if parameter_set_id > counter:
+                parameter_set['constraints'] = constraints
+                parameter_sets.append(parameter_set)
+                parameter_set = {}
+                constraints = {}
+                counter = parameter_set_id
+
+            # add parameter set info:
+            parameter_set['parameter_set_id'] = parameter_set_id
+            parameter_set['telescope'] = telescope_name
+            parameter_set['active'] = active_set
+
+            # add constraint dictionary:
             if constraint_name not in constraints.keys():
                 constraints[constraint_name] = {}
 
+            # add parameter:
             if value is None:
-                constraints[constraint_name][param_name] = svalue
-            elif (param_name in constraints[constraint_name] and not
-                  isinstance(constraints[constraint_name][param_name], list)):
-                constraints[constraint_name][param_name] = [
-                        constraints[constraint_name][param_name]]
-                constraints[constraint_name][param_name].append(value)
-            elif param_name in constraints[constraint_name]:
-                constraints[constraint_name][param_name].append(value)
+                constraints[constraint_name][parameter_name] = svalue
+            elif (parameter_name in constraints[constraint_name] \
+                    and not isinstance(
+                        constraints[constraint_name][parameter_name], list)):
+                constraints[constraint_name][parameter_name] = [
+                        constraints[constraint_name][parameter_name]]
+                constraints[constraint_name][parameter_name].append(value)
+            elif parameter_name in constraints[constraint_name]:
+                constraints[constraint_name][parameter_name].append(value)
             else:
-                constraints[constraint_name][param_name] = value
+                constraints[constraint_name][parameter_name] = value
 
-        return parameter_set_id, constraints
+        # store final parameter set:
+        parameter_set['constraints'] = constraints
+        parameter_sets.append(parameter_set)
+
+        # if single parameter set is requested remove enclosing list structure:
+        if telescope and active:
+            parameter_sets = parameter_sets[0]
+
+        return parameter_sets
+
+    #--------------------------------------------------------------------------
+    def _print_telescope(self, telescope):
+        # TODO
+
+        info = """\
+            ---------------------------
+            Telescope ID: {0}
+            Name: {1}
+            Latitude : {2:7.2f} deg N
+            Longitude: {3:7.2f} deg E
+            Height:    {4:7.2f} m\
+            """.format(
+                    telescope['telescope_id'], telescope['name'],
+                    Angle(telescope['lat']).deg, Angle(telescope['lon']).deg,
+                    telescope['height'])
+
+        print(dedent(info))
+
+    #--------------------------------------------------------------------------
+    def _print_parameter_set(self, parameter_set):
+        # TODO
+
+        info = """\
+            ---------------------------
+            Parameter set ID: {0}
+            Active: {1}\
+            """.format(
+                    parameter_set['parameter_set_id'], parameter_set['active'])
+
+        print(dedent(info))
+
+    #--------------------------------------------------------------------------
+    def _print_constraints(self, constraints):
+        # TODO
+
+        print('Constraints:')
+
+        for name, pars in constraints.items():
+            print(f'* {name}')
+
+            for name, par in pars.items():
+                print(f'  - {name}:', par)
+
+    #--------------------------------------------------------------------------
+    def info(self, constraints=False):
+        # TODO
+
+        telescopes = self.get_telescopes(constraints=constraints)
+
+        print('======== TELECOPES ========')
+        print(f'{len(telescopes)} telescopes stored in database.')
+
+        for telescope in telescopes:
+            self._print_telescope(telescope)
+
+            # print all parameter sets:
+            if isinstance(constraints, str) and constraints.lower() == 'all':
+                n_par_sets = len(telescope['parameter_sets'])
+                print('---------------------------')
+                print(f'{n_par_sets} associated parameter sets')
+
+                for par_set in telescope['parameter_sets']:
+                    self._print_parameter_set(par_set)
+                    self._print_constraints(par_set['constraints'])
+
+            # print active constraints:
+            elif constraints:
+                self._print_constraints(telescope['constraints'])
 
 #==============================================================================
 

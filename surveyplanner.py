@@ -616,14 +616,15 @@ class SurveyPlanner:
         db = TelescopeManager(self.dbname)
 
         # create telescope:
-        telescope = db.get_telescope(telescope_name)
+        telescope = db.get_telescopes(telescope_name)
         self.telescope = Telescope(
                 telescope['lat'], telescope['lon'], telescope['height'],
                 telescope['utc_offset'], name=telescope['name'])
 
         # load twilight, but skip loading other constraints:
         if no_constraints:
-            parameter_set_id, constraints = db.get_constraints(telescope_name)
+            parameter_set_id, constraints = db.get_constraints(
+                    telescope=telescope_name, active=True)['constraints']
             self.twilight = constraints['Twilight']['twilight']
             return None
 
@@ -788,7 +789,7 @@ class SurveyPlanner:
 
         # get telescope information:
         telescope_name = telescope
-        telescope = db.get_telescope(telescope)
+        telescope = db.get_telescopes(telescope)
         utc_offset = telescope['utc_offset'] * u.h
 
         # get local noon of current and next day in UTC:
