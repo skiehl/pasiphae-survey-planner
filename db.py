@@ -8,6 +8,7 @@ from astropy import units as u
 from math import ceil
 import numpy as np
 import os
+from pandas import DataFrame
 import sqlite3
 from textwrap import dedent
 import warnings
@@ -1073,7 +1074,17 @@ class TelescopeManager(DBManager):
 
     #--------------------------------------------------------------------------
     def _print_telescope(self, telescope):
-        # TODO
+        """Print info about telescope.
+
+        Parameters
+        ----------
+        telescope : str
+            Telescope name.
+
+        Returns
+        -------
+        None
+        """
 
         info = """\
             ---------------------------
@@ -1091,7 +1102,17 @@ class TelescopeManager(DBManager):
 
     #--------------------------------------------------------------------------
     def _print_parameter_set(self, parameter_set):
-        # TODO
+        """Print info about parameter set.
+
+        Parameters
+        ----------
+        parameter_set : dict
+            Parameter set dict as returned by _get_constraints().
+
+        Returns
+        -------
+        None
+        """
 
         info = """\
             ---------------------------
@@ -1104,7 +1125,17 @@ class TelescopeManager(DBManager):
 
     #--------------------------------------------------------------------------
     def _print_constraints(self, constraints):
-        # TODO
+        """Print infos about constraints.
+
+        Parameters
+        ----------
+        constraints : dict
+            Constraints dict as returned by _get_constraints()..
+
+        Returns
+        -------
+        None
+        """
 
         print('Constraints:')
 
@@ -1116,7 +1147,19 @@ class TelescopeManager(DBManager):
 
     #--------------------------------------------------------------------------
     def info(self, constraints=False):
-        # TODO
+        """Print infos about telescopes and constraints.
+
+        Parameters
+        ----------
+        constraints : bool or str, optional
+            If 'all', print info about all parameter sets and constraints.
+            If True, print info about active constraints. Otherwise, no info
+            about constraints is printed. The default is False.
+
+        Returns
+        -------
+        None
+        """
 
         telescopes = self.get_telescopes(constraints=constraints)
 
@@ -1139,6 +1182,8 @@ class TelescopeManager(DBManager):
             # print active constraints:
             elif constraints:
                 self._print_constraints(telescope['constraints'])
+
+        print('---------------------------\n')
 
 #==============================================================================
 
@@ -1397,6 +1442,34 @@ class FieldManager(DBManager):
             result = self._query(connection, query).fetchall()
 
         return result
+
+    #--------------------------------------------------------------------------
+    def info(self, telescope=None):
+
+        fields = self.get_fields(telescope=telescope)
+        fields = DataFrame(fields)
+        n_fields = fields.shape[0]
+
+        print('========== FIELDS =========')
+
+        if telescope is None:
+            print('All fields in the database')
+        else:
+            print(f"Fields associated with telescope '{telescope}'")
+
+        print('---------------------------')
+        print(f'Total number of fields: {n_fields:7d}')
+
+        n_pending_fields = np.sum(fields.iloc[:,11] > 0)
+        n_pending_obs = np.sum(fields.iloc[:,11])
+        n_finished_fields = np.sum(fields.iloc[:,11] == 0)
+        n_finished_obs = np.sum(fields.iloc[:,10])
+
+        print(f'Pending fields:         {n_pending_fields:7d}')
+        print(f'Pending observations:   {n_pending_obs:7d}')
+        print(f'Finished fields:        {n_finished_fields:7d}')
+        print(f'Finished observations:  {n_finished_obs:7d}')
+        print('---------------------------\n')
 
 #==============================================================================
 
