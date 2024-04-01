@@ -680,6 +680,79 @@ class TelescopeManager(DBManager):
                             "constraint get_params() method.")
 
     #--------------------------------------------------------------------------
+    def _print_telescope(self, telescope):
+        """Print info about telescope.
+
+        Parameters
+        ----------
+        telescope : str
+            Telescope name.
+
+        Returns
+        -------
+        None
+        """
+
+        info = """\
+            -----------------------------------
+            Telescope ID: {0}
+            Name: {1}
+            Latitude : {2:10.2f} deg N
+            Longitude: {3:10.2f} deg E
+            Height:    {4:10.2f} m\
+            """.format(
+                    telescope['telescope_id'], telescope['name'],
+                    Angle(telescope['lat']).deg, Angle(telescope['lon']).deg,
+                    telescope['height'])
+
+        print(dedent(info))
+
+    #--------------------------------------------------------------------------
+    def _print_parameter_set(self, parameter_set):
+        """Print info about parameter set.
+
+        Parameters
+        ----------
+        parameter_set : dict
+            Parameter set dict as returned by _get_constraints().
+
+        Returns
+        -------
+        None
+        """
+
+        info = """\
+            -----------------------------------
+            Parameter set ID: {0}
+            Active: {1}\
+            """.format(
+                    parameter_set['parameter_set_id'], parameter_set['active'])
+
+        print(dedent(info))
+
+    #--------------------------------------------------------------------------
+    def _print_constraints(self, constraints):
+        """Print infos about constraints.
+
+        Parameters
+        ----------
+        constraints : dict
+            Constraints dict as returned by _get_constraints()..
+
+        Returns
+        -------
+        None
+        """
+
+        print('Constraints:')
+
+        for name, pars in constraints.items():
+            print(f'* {name}')
+
+            for name, par in pars.items():
+                print(f'  - {name}:', par)
+
+    #--------------------------------------------------------------------------
     def add_telescope(self, name, lat, lon, height, utc_offset):
         """Add telescope to database.
 
@@ -1073,79 +1146,6 @@ class TelescopeManager(DBManager):
         return parameter_sets
 
     #--------------------------------------------------------------------------
-    def _print_telescope(self, telescope):
-        """Print info about telescope.
-
-        Parameters
-        ----------
-        telescope : str
-            Telescope name.
-
-        Returns
-        -------
-        None
-        """
-
-        info = """\
-            ---------------------------
-            Telescope ID: {0}
-            Name: {1}
-            Latitude : {2:7.2f} deg N
-            Longitude: {3:7.2f} deg E
-            Height:    {4:7.2f} m\
-            """.format(
-                    telescope['telescope_id'], telescope['name'],
-                    Angle(telescope['lat']).deg, Angle(telescope['lon']).deg,
-                    telescope['height'])
-
-        print(dedent(info))
-
-    #--------------------------------------------------------------------------
-    def _print_parameter_set(self, parameter_set):
-        """Print info about parameter set.
-
-        Parameters
-        ----------
-        parameter_set : dict
-            Parameter set dict as returned by _get_constraints().
-
-        Returns
-        -------
-        None
-        """
-
-        info = """\
-            ---------------------------
-            Parameter set ID: {0}
-            Active: {1}\
-            """.format(
-                    parameter_set['parameter_set_id'], parameter_set['active'])
-
-        print(dedent(info))
-
-    #--------------------------------------------------------------------------
-    def _print_constraints(self, constraints):
-        """Print infos about constraints.
-
-        Parameters
-        ----------
-        constraints : dict
-            Constraints dict as returned by _get_constraints()..
-
-        Returns
-        -------
-        None
-        """
-
-        print('Constraints:')
-
-        for name, pars in constraints.items():
-            print(f'* {name}')
-
-            for name, par in pars.items():
-                print(f'  - {name}:', par)
-
-    #--------------------------------------------------------------------------
     def info(self, constraints=False):
         """Print infos about telescopes and constraints.
 
@@ -1163,7 +1163,7 @@ class TelescopeManager(DBManager):
 
         telescopes = self.get_telescopes(constraints=constraints)
 
-        print('======== TELECOPES ========')
+        print('============ TELECOPES ============')
         print(f'{len(telescopes)} telescopes stored in database.')
 
         for telescope in telescopes:
@@ -1172,7 +1172,7 @@ class TelescopeManager(DBManager):
             # print all parameter sets:
             if isinstance(constraints, str) and constraints.lower() == 'all':
                 n_par_sets = len(telescope['parameter_sets'])
-                print('---------------------------')
+                print('-----------------------------------')
                 print(f'{n_par_sets} associated parameter sets')
 
                 for par_set in telescope['parameter_sets']:
@@ -1183,7 +1183,7 @@ class TelescopeManager(DBManager):
             elif constraints:
                 self._print_constraints(telescope['constraints'])
 
-        print('---------------------------\n')
+        print('-----------------------------------\n')
 
 #==============================================================================
 
@@ -1273,8 +1273,8 @@ class FieldManager(DBManager):
         Parameters
         ----------
         telescope : str, optional
-            Observatory name. If set, only query fields associated with this
-            telescope. If None, query fields for all observatories. The
+            Telescope name. If set, only query fields associated with this
+            telescope. If None, query fields for all telescopes. The
             default is None.
         observed : bool, optional
             If True, only query fields that have been observed at least once.
@@ -1444,32 +1444,58 @@ class FieldManager(DBManager):
         return result
 
     #--------------------------------------------------------------------------
-    def info(self, telescope=None):
+    def info(self, telescope=None, active=True):
+        """Print info about fields.
 
-        fields = self.get_fields(telescope=telescope)
+        Parameters
+        ----------
+        telescope : bool or None, optional
+            Telescope name. If given, print info only about fields associated
+            with this telescope. The default is None.
+        active : bool or None, optional
+            If True, print info only about active fields. If False, print info
+            only about inactive fields. If None, print info about fields,
+            regardless of whether they are active or not. The default is True.
+
+        Returns
+        -------
+        None
+        """
+
+        fields = self.get_fields(telescope=telescope, active=active)
         fields = DataFrame(fields)
         n_fields = fields.shape[0]
 
-        print('========== FIELDS =========')
+        print('============== FIELDS =============')
 
-        if telescope is None:
+        if telescope is None and active is None:
             print('All fields in the database')
+        elif telescope is None and active:
+            print('All active fields in the database')
+        elif telescope is None and not active:
+            print('All inactive fields in the database')
+        elif active:
+            print(f"Active fields associated with telescope '{telescope}'")
+        elif not active:
+            print(f"Inactive fields associated with telescope '{telescope}'")
         else:
             print(f"Fields associated with telescope '{telescope}'")
 
-        print('---------------------------')
-        print(f'Total number of fields: {n_fields:7d}')
+        print('-----------------------------------')
+        print(f'Total number of fields: {n_fields:11d}')
 
-        n_pending_fields = np.sum(fields.iloc[:,11] > 0)
-        n_pending_obs = np.sum(fields.iloc[:,11])
-        n_finished_fields = np.sum(fields.iloc[:,11] == 0)
-        n_finished_obs = np.sum(fields.iloc[:,10])
+        if n_fields:
+            n_pending_fields = np.sum(fields.iloc[:,11] > 0)
+            n_pending_obs = np.sum(fields.iloc[:,11])
+            n_finished_fields = np.sum(fields.iloc[:,11] == 0)
+            n_finished_obs = np.sum(fields.iloc[:,10])
 
-        print(f'Pending fields:         {n_pending_fields:7d}')
-        print(f'Pending observations:   {n_pending_obs:7d}')
-        print(f'Finished fields:        {n_finished_fields:7d}')
-        print(f'Finished observations:  {n_finished_obs:7d}')
-        print('---------------------------\n')
+            print(f'Pending fields:         {n_pending_fields:11d}')
+            print(f'Pending observations:   {n_pending_obs:11d}')
+            print(f'Finished fields:        {n_finished_fields:11d}')
+            print(f'Finished observations:  {n_finished_obs:11d}')
+
+        print('-----------------------------------\n')
 
 #==============================================================================
 
@@ -1477,13 +1503,18 @@ class GuidestarManager(DBManager):
     """Database manager for guide stars."""
 
     #--------------------------------------------------------------------------
-    def _get_by_field_id(self, field_id):
+    def _get_by_field_id(self, field_id, active=True):
         """Get guide stars for a specific field from database.
 
         Parameters
         ----------
         field_id : int
             Only guidestars associated with that field are returned.
+        active : bool, optional
+            If True, only active guidestars are returned. If False, only
+            inactive guidestars are returned. If None, all guidestars are
+            returned regardless of whether they are active or not. The default
+            is True.
 
         Returns
         -------
@@ -1493,19 +1524,37 @@ class GuidestarManager(DBManager):
             guidestar declination in rad.
         """
 
+        # define SQL WHERE clause:
+        if active is None:
+            where_clause = f"WHERE field_id = '{field_id}'"
+        elif active:
+            where_clause = f"WHERE (field_id = '{field_id}' AND active = TRUE)"
+        else:
+            where_clause = f"WHERE (field_id = '{field_id}' "\
+                    "AND active = FALSE)"
+
+        # query:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 SELECT *
                 FROM Guidestars
-                WHERE field_id='{0}'
-                """.format(field_id)
+                {0}
+                """.format(where_clause)
             results = self._query(connection, query).fetchall()
 
         return results
 
     #--------------------------------------------------------------------------
-    def _get_all(self):
+    def _get_all(self, active=True):
         """Get all guide stars from database.
+
+        Parameters
+        ----------
+        active : bool, optional
+            If True, only active guidestars are returned. If False, only
+            inactive guidestars are returned. If None, all guidestars are
+            returned regardless of whether they are active or not. The default
+            is True.
 
         Returns
         -------
@@ -1515,12 +1564,21 @@ class GuidestarManager(DBManager):
             guidestar declination in rad.
         """
 
+        # define SQL WHERE clause:
+        if active is None:
+            where_clause = ""
+        elif active:
+            where_clause = "WHERE active = TRUE"
+        else:
+            where_clause = "WHERE active = FALSE"
+
+        # query:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 SELECT *
                 FROM Guidestars
-                WHERE active = 1
-                """
+                {0}
+                """.format(where_clause)
             results = self._query(connection, query).fetchall()
 
         return results
@@ -1688,33 +1746,40 @@ class GuidestarManager(DBManager):
 
         Returns
         -------
-        results : list
+        field_ids : list
             Field IDs of fields without associated guidestars.
+
+        Notes
+        -----
+        This method calls `get_fields_missing_guidestar()`.
         """
 
         # query data base:
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                    SELECT f.field_id
-                    FROM Fields AS f
-                    LEFT JOIN Guidestars AS g
-                    ON f.field_id = g.field_id
-                    WHERE g.guidestar_id IS NULL;
-                    """
-            results = [x[0] for x in self._query(connection, query).fetchall()]
+        field_ids = self.get_fields_missing_guidestar()
 
-            # inform user:
-            if results:
-                print('\nWARNING: Fields with the following IDs do not have '
-                      'any guidestars associated:')
-                text = ''
+        # inform user about fields without guidestars:
+        if field_ids['none']:
+            print('\nWARNING: Fields with the following IDs do not have '
+                  'any guidestars associated:')
+            text = ''
 
-                for field_id in results:
-                    text = f'{text}{field_id}, '
+            for field_id in field_ids['none']:
+                text = f'{text}{field_id}, '
 
-                print(text[:-2])
+        # inform user about fields without active guidestars:
+        if field_ids['inactive']:
+            print('\nWARNING: Fields with the following IDs do not have '
+                  'any guidestars associated:')
+            text = ''
 
-        return results
+            for field_id in field_ids['inactive']:
+                text = f'{text}{field_id}, '
+
+            print(text[:-2])
+
+            print(text[:-2])
+
+        return field_ids
 
     #--------------------------------------------------------------------------
     def _add_guidestar(self, field_ids, ras, decs):
@@ -1748,9 +1813,9 @@ class GuidestarManager(DBManager):
         print(f'{len(data)} new guidestars added to database.')
 
     #--------------------------------------------------------------------------
-    def add_guidestar(self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
+    def add_guidestars(self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
             warn_sep=0):
-        """Add new guidestars to the database.
+        """Add new guidestar(s) to the database.
 
         Parameters
         ----------
@@ -1865,7 +1930,7 @@ class GuidestarManager(DBManager):
             self._warn_missing()
 
     #--------------------------------------------------------------------------
-    def get_guidestar(self, field_id=None):
+    def get_guidestars(self, field_id=None, active=True):
         """Get guide stars from database.
 
         Parameters
@@ -1874,6 +1939,11 @@ class GuidestarManager(DBManager):
             If a field ID is given, only guidestars associated with that field
             are returned. If None, all guidestars are returned. The default is
             None.
+        active : bool, optional
+            If True, only active guidestars are returned. If False, only
+            inactive guidestars are returned. If None, all guidestars are
+            returned regardless of whether they are active or not. The default
+            is True.
 
         Raises
         ------
@@ -1885,7 +1955,8 @@ class GuidestarManager(DBManager):
         results : list of tuples
             List of guidestars. Each tuple contains the guidestar ID,
             associated field ID, guidestar right ascension in rad, and
-            guidestar declination in rad.
+            guidestar declination in rad, and a flag whether the guidestar is
+            active or not.
 
         Notes
         -----
@@ -1893,13 +1964,138 @@ class GuidestarManager(DBManager):
         """
 
         if isinstance(field_id, int):
-            results = self._get_by_field_id(field_id)
+            results = self._get_by_field_id(field_id, active=active)
         elif field_id is None:
-           results = self._get_all()
+           results = self._get_all(active=active)
         else:
             raise ValueError('`field_id` must be int or None.')
 
         return results
+
+    #--------------------------------------------------------------------------
+    def get_fields_missing_guidestar(self):
+        """Get IDs of fields that do not have any associated guidestars.
+
+        Returns
+        -------
+        field_ids : dict
+            The key 'none' contains a list of field IDs that have no associated
+            guidestars. The key 'inactive' contains a list of field IDs that
+            only have inactive guidestars associated.
+
+        Notes
+        -----
+        This method is called by `_warn_missing()`.
+        """
+
+        # query data base:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                    SELECT *
+                    FROM (
+                    	SELECT f.field_id, SUM(g.active) AS active
+                    	FROM Fields AS f
+                    	LEFT JOIN Guidestars AS g
+                    	ON f.field_id = g.field_id
+                    	GROUP BY f.field_id)
+                    WHERE (
+                    	active = 0
+                    	OR active IS NULL)
+                    """
+            results = self._query(connection, query).fetchall()
+            field_ids = {'none': [], 'inactive': []}
+
+            for field_id, result in results:
+                if result == 0:
+                    field_ids['inactive'].append(field_id)
+                elif result is None:
+                    field_ids['none'].append(field_id)
+                else:
+                    raise ValueError("This should not happen!")
+
+        return field_ids
+
+    #--------------------------------------------------------------------------
+    def deactivate(self, guidestar_ids):
+
+        if isinstance(guidestar_ids, int):
+            guidestar_ids = [guidestar_ids]
+        elif type(guidestar_ids) in [list, tuple]:
+            pass
+        else:
+            raise ValueError("`guidestar_ids` must be int or list.")
+
+        with SQLiteConnection(self.db_file) as connection:
+            for guidestar_id in guidestar_ids:
+                query = """\
+                    UPDATE Guidestars
+                    SET active=FALSE
+                    WHERE guidestar_id={0}
+                    """.format(guidestar_id)
+                self._query(connection, query, commit=False)
+
+            connection.commit()
+
+        print(f'Deactivated {len(guidestar_ids)} guidestars.')
+
+    #--------------------------------------------------------------------------
+    def info(self, field_id=None):
+        """Print info about guidestars.
+
+        Parameters
+        ----------
+        field_id : int or None, optional
+            Field ID. If given, print info about guidestars associated with
+            this field. Otherwise, print info about all guidestars. The default
+            is None.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method calls `get_guidestars()` and
+        `get_fields_missing_guidestar()`.
+        """
+
+        guidestars = DataFrame(
+                self.get_guidestars(field_id=field_id, active=None))
+
+        if guidestars.shape[0]:
+            n_tot = guidestars.shape[0]
+            n_active = guidestars.loc[:, 4].sum()
+            n_inactive = n_tot - n_active
+            sel = guidestars.loc[:, 4] == 1
+            n_fields = guidestars.loc[sel, 1].unique().shape[0]
+        else:
+            n_tot = 0
+            n_active = 0
+            n_inactive = 0
+            n_fields = 0
+
+
+        print('============ GUIDESTARS ===========')
+
+        if field_id is not None:
+            print(f'Associated with field ID {field_id}')
+
+        print(f'Total:                       {n_tot:6d}')
+        print(f'Active:                      {n_active:6d}')
+        print(f'Inactive:                    {n_inactive:6d}')
+
+        if field_id is None:
+            field_ids = self.get_fields_missing_guidestar()
+            n_fields_missing = len(field_ids['none'])
+            n_fields_inactive = len(field_ids['inactive'])
+            print(f'Fields w. guidestars:        {n_fields:6d}')
+            print(f'Fields w/o guidestar:        {n_fields_missing:6d}')
+            print(f'Fields w/o active guidestar: {n_fields_inactive:6d}')
+
+        elif not n_active:
+            print('WARNING: This field has no (active) guidestars!')
+
+        print('-----------------------------------\n')
 
 #==============================================================================
 
@@ -2816,7 +3012,7 @@ class DBCreator(DBManager):
     def add_guidestars(
             self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
             warn_sep=0):
-        """Add new guidestars to the database.
+        """Add new guidestar(s) to the database.
 
         Parameters
         ----------
@@ -2847,7 +3043,7 @@ class DBCreator(DBManager):
         """
 
         manager = GuidestarManager(self.db_file)
-        manager.add_guidestar(
+        manager.add_guidestars(
                 field_ids, ra, dec, warn_missing=warn_missing,
                 warn_rep=warn_rep, warn_sep=warn_sep)
 
