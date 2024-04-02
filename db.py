@@ -37,6 +37,7 @@ class SQLiteConnection:
     """Wrapper class for SQLite connection that allows the use of the
     python with-statement."""
 
+    #--------------------------------------------------------------------------
     def __init__(self, db_file):
         """Create SQLiteConnection instance.
 
@@ -52,6 +53,7 @@ class SQLiteConnection:
 
         self.db_file = db_file
 
+    #--------------------------------------------------------------------------
     def __enter__(self):
         """Open database connection and return it.
 
@@ -62,9 +64,11 @@ class SQLiteConnection:
         """
 
         self.connection = sqlite3.connect(self.db_file)
+        self.connection.row_factory = self._dict_factory
 
         return self.connection
 
+    #--------------------------------------------------------------------------
     def __exit__(self, type, value, traceback):
         """Close database connection.
 
@@ -74,6 +78,31 @@ class SQLiteConnection:
         """
 
         self.connection.close()
+
+    #--------------------------------------------------------------------------
+    def _dict_factory(self, cursor, row):
+        """Return query results as dict.
+
+        Parameters
+        ----------
+        cursor : sqlite3.Cursor
+            SQLite3 cursor.
+        row : tuple
+            Tuple containing the query results from one row.
+
+        Returns
+        -------
+        dict
+            Query results as dict, where keys are the column names.
+
+        Notes
+        -----
+        This method is used by `__enter__()`.
+        """
+
+        fields = [column[0] for column in cursor.description]
+
+        return {key: value for key, value in zip(fields, row)}
 
 #==============================================================================
 
@@ -168,7 +197,7 @@ class DBManager:
 
         query = """SELECT last_insert_rowid()"""
         result = self._query(connection, query).fetchone()
-        last_insert_id = result[0]
+        last_insert_id = result['last_insert_rowid()']
 
         return last_insert_id
 
@@ -239,7 +268,7 @@ class TelescopeManager(DBManager):
         if result is None:
             parameter_set_id = -1
         else:
-            parameter_set_id = result[0]
+            parameter_set_id = result['parameter_set_id']
 
         return parameter_set_id
 
@@ -346,7 +375,8 @@ class TelescopeManager(DBManager):
                 WHERE parameter_set_id = {0}
                 """.format(parameter_set_id)
             self._query(connection, query, commit=True)
-            n = self._query(connection, "SELECT CHANGES()").fetchone()[0]
+            result = self._query(connection, "SELECT CHANGES()").fetchone()
+            n = result['CHANGES()']
 
         print(f'{n} corresponding observabilities deactivated.')
 
@@ -387,7 +417,9 @@ class TelescopeManager(DBManager):
                     WHERE observability_id = {0}
                     """.format(observability_id)
                 self._query(connection, query, commit=False)
-                n += self._query(connection, "SELECT CHANGES()").fetchone()[0]
+                result = self._query(connection, "SELECT CHANGES()").fetchone()
+                n += result['CHANGES()']
+
             connection.commit()
         print(f'{n} corresponding observing windows deactivated.')
 
@@ -417,7 +449,8 @@ class TelescopeManager(DBManager):
                 WHERE parameter_set_id = {0}
                 """.format(parameter_set_id)
             self._query(connection, query, commit=True)
-            n = self._query(connection, "SELECT CHANGES()").fetchone()[0]
+            result = self._query(connection, "SELECT CHANGES()").fetchone()
+            n = result['CHANGES()']
 
         print(f'{n} corresponding time ranges deactivated.')
 
@@ -489,7 +522,7 @@ class TelescopeManager(DBManager):
             raise NotInDatabase(
                     f"Constraint '{constraint_name}' does not exist.")
 
-        constraint_id = result[0]
+        constraint_id = result['constraint_id']
 
         return constraint_id
 
@@ -533,7 +566,7 @@ class TelescopeManager(DBManager):
 
             # parameter name exists:
             else:
-                parameter_name_id = result[0]
+                parameter_name_id = result['parameter_name_id']
 
         return parameter_name_id
 
@@ -702,8 +735,8 @@ class TelescopeManager(DBManager):
             Height:    {4:10.2f} m\
             """.format(
                     telescope['telescope_id'], telescope['name'],
-                    Angle(telescope['lat']).deg, Angle(telescope['lon']).deg,
-                    telescope['height'])
+                    Angle(telescope['lat']*u.rad).deg,
+                    Angle(telescope['lon']*u.rad).deg, telescope['height'])
 
         print(dedent(info))
 
@@ -845,8 +878,9 @@ class TelescopeManager(DBManager):
 
         # check if telescope exists:
         if not self._telescope_exists(telescope):
-            print(f"Telescope '{telescope}' does not exist in database. Use "
-                  "TelescopeManager() to manage telescopes or add new ones.")
+            print(f"WARNING: Telescope '{telescope}' does not exist in "
+                  "database. Use TelescopeManager() to manage telescopes or "
+                  "add new ones.")
             return None
 
         # check if parameter set exists:
@@ -911,7 +945,7 @@ class TelescopeManager(DBManager):
         if result is None:
             raise NotInDatabase(f"telescope '{name}' does not exist.")
 
-        telescope_id = result[0]
+        telescope_id = result['telescope_id']
 
         return telescope_id
 
@@ -932,7 +966,7 @@ class TelescopeManager(DBManager):
                 """
             results = self._query(connection, query).fetchall()
 
-        telescope_names = [result[0] for result in results]
+        telescope_names = [result['telescope_name'] for result in results]
 
         return telescope_names
 
@@ -952,12 +986,10 @@ class TelescopeManager(DBManager):
 
         Returns
         -------
-        telescopes : dict or list of dict
-            If a name is given, a dictionary is returned with the telescope
-            data. If no name is given a list is returned where each item is a
-            dictionary corresponding to one telescope.
+        telescopes : list of dict
+            Each list item is a dictionary corresponding to one telescope.
+            If a telescope name is given, the list contains only one item.
         """
-        # TODO: add option to include constraints in returned dict
 
         # define SQL WHERE conditions:
         if name is None:
@@ -976,43 +1008,30 @@ class TelescopeManager(DBManager):
                 """.format(where_clause)
             results = self._query(connection, query).fetchall()
 
-        # parse to dictionaries:
+        # add constraints, if requested:
         telescopes = []
 
-        for result in results:
-            telescope_id = result[0]
-            telescope_name = result[1]
-            lat = result[2] * u.rad
-            lon = result[3] * u.rad
-            height = result[4]
-            utc_offset = result[5]
-
-            # store telescope info:
-            telescope = {
-                'telescope_id': telescope_id, 'name': telescope_name,
-                'lat': lat, 'lon': lon, 'height': height,
-                'utc_offset': utc_offset}
+        for telescope in results:
 
             if isinstance(constraints, str) and constraints.lower() == 'all':
                 parameter_sets = self.get_constraints(
-                        telescope=telescope_name, active=False)
+                        telescope=telescope['name'], active=False)
                 telescope['parameter_sets'] = parameter_sets
             elif constraints:
                 parameter_set = self.get_constraints(
-                        telescope=telescope_name, active=True)
-                telescope['constraints'] = parameter_set['constraints']
+                        telescope=telescope['name'], active=True)
+                telescope['parameter_set_id'] = \
+                        parameter_set[0]['parameter_set_id']
+                telescope['constraints'] = parameter_set[0]['constraints']
 
             telescopes.append(telescope)
-
-        if name is not None:
-            telescopes = telescopes[0]
 
         return telescopes
 
     #--------------------------------------------------------------------------
     def get_constraints(self, telescope=None, active=True):
         """Query constraints associated with a specified telescope from the
-        database
+        database.
 
         Parameters
         ----------
@@ -1031,9 +1050,8 @@ class TelescopeManager(DBManager):
 
         Returns
         -------
-        parameter_sets : dict or list
-            If telescope is specified and active is True, a dict is returned.
-            Otherwise, a list of dicts. The dict contains the parameter set ID,
+        parameter_sets : list of dict
+            Each item is a dict that contains the parameter set ID,
             telescope name, whether the set is active or not, and a dict of
             constraints, which is structured as following. The keys are the
             constraint names. The values are dictionaries that contain the
@@ -1059,7 +1077,8 @@ class TelescopeManager(DBManager):
 
             query = """\
                 SELECT ps.parameter_set_id, pn.parameter_name, p.value,
-                    p.svalue, c.constraint_name, t.name, ps.active
+                    p.svalue, c.constraint_name, t.name AS telescope_name,
+                    ps.active
                 FROM Parameters p
                 LEFT JOIN ParameterNames pn
                     ON p.parameter_name_id = pn.parameter_name_id
@@ -1086,6 +1105,7 @@ class TelescopeManager(DBManager):
         elif not results:
             raise NotInDatabase("No constraints stored.")
 
+        # TODO............................
         # parse to dictionaries:
         parameter_sets = []
         parameter_set = {}
@@ -1093,13 +1113,13 @@ class TelescopeManager(DBManager):
         counter = 1
 
         for i, result in enumerate(results):
-            parameter_set_id = result[0]
-            parameter_name = result[1]
-            value = result[2]
-            svalue = result[3]
-            constraint_name = result[4]
-            telescope_name = result[5]
-            active_set = bool(result[6])
+            parameter_set_id = result['parameter_set_id']
+            parameter_name = result['parameter_name']
+            value = result['value']
+            svalue = result['svalue']
+            constraint_name = result['constraint_name']
+            telescope_name = result['telescope_name']
+            active_set = bool(result['active'])
 
             if i == 0:
                 counter = parameter_set_id
@@ -1138,10 +1158,6 @@ class TelescopeManager(DBManager):
         # store final parameter set:
         parameter_set['constraints'] = constraints
         parameter_sets.append(parameter_set)
-
-        # if single parameter set is requested remove enclosing list structure:
-        if telescope and active:
-            parameter_sets = parameter_sets[0]
 
         return parameter_sets
 
@@ -1305,9 +1321,8 @@ class FieldManager(DBManager):
 
         Returns
         -------
-        result : list of tuples
-            List of the queried fields. Each tuple contains the field
-            parameters.
+        results : list of dict
+            Each list item is a dict with the field parameters.
         """
 
         # check input:
@@ -1365,6 +1380,7 @@ class FieldManager(DBManager):
                 LEFT JOIN (
                 	SELECT field_id, SUM(Done) nobs_done, COUNT(*) nobs_tot
                 	FROM Observations
+                    WHERE active = 1
                 	GROUP BY field_id
                 	) AS p
                 ON f.field_id = p.field_id
@@ -1372,9 +1388,9 @@ class FieldManager(DBManager):
                 """.format(
                         active, condition_telescope, condition_observed,
                         condition_pending, condition_obswindow)
-            result = self._query(connection, query).fetchall()
+            results = self._query(connection, query).fetchall()
 
-        return result
+        return results
 
     #--------------------------------------------------------------------------
     def get_field_by_id(self, field_id):
@@ -1387,9 +1403,8 @@ class FieldManager(DBManager):
 
         Returns
         -------
-        result : list of tuple
-            The list contains only one tuple. The tuple contains the field
-            parameters.
+        result : dict
+            The field parameters.
 
         Notes
         -----
@@ -1413,9 +1428,9 @@ class FieldManager(DBManager):
                         GROUP BY field_id
                         ) AS p
                     ON f.field_id = p.field_id
-                    WHERE f.field_id = {0} AND p.field_id = {0};
+                    WHERE f.field_id = {0}
                     """.format(field_id)
-            result = self._query(connection, query).fetchall()
+            result = self._query(connection, query).fetchone()
 
         return result
 
@@ -1426,8 +1441,8 @@ class FieldManager(DBManager):
 
         Returns
         -------
-        result : list of tuples
-            Each tuple contains the field ID and the corresponding MJD for
+        results : list of dict
+            Each dict contains the field ID and the corresponding MJD for
             which an observability is stored with unset or unknown status.
         """
 
@@ -1439,9 +1454,9 @@ class FieldManager(DBManager):
             	status_id = 1
             	AND active = 1)
             """
-            result = self._query(connection, query).fetchall()
+            results = self._query(connection, query).fetchall()
 
-        return result
+        return results
 
     #--------------------------------------------------------------------------
     def info(self, telescope=None, active=True):
@@ -1518,8 +1533,8 @@ class GuidestarManager(DBManager):
 
         Returns
         -------
-        results : list of tuples
-            List of guidestars. Each tuple contains the guidestar ID,
+        results : list of dict
+            List of guidestars. Each dict contains the guidestar ID,
             associated field ID, guidestar right ascension in rad, and
             guidestar declination in rad.
         """
@@ -1558,8 +1573,8 @@ class GuidestarManager(DBManager):
 
         Returns
         -------
-        results : list of tuples
-            List of guidestars. Each tuple contains the guidestar ID,
+        results : list of dict
+            List of guidestars. Each dict contains the guidestar ID,
             associated field ID, guidestar right ascension in rad, and
             guidestar declination in rad.
         """
@@ -1617,11 +1632,11 @@ class GuidestarManager(DBManager):
         stored_gs_ras = []
         stored_gs_decs =[]
 
-        for guidestar_id, field_id, ra, dec, __ in self._get_all():
-            stored_gs_id.append(guidestar_id)
-            stored_gs_field_ids.append(field_id)
-            stored_gs_ras.append(ra)
-            stored_gs_decs.append(dec)
+        for guidestar in self._get_all():
+            stored_gs_id.append(guidestar['guidestar_id'])
+            stored_gs_field_ids.append(guidestar['field_id'])
+            stored_gs_ras.append(guidestar['ra'])
+            stored_gs_decs.append(guidestar['dec'])
 
         if not stored_gs_id:
             return field_ids, ras, decs
@@ -1715,8 +1730,9 @@ class GuidestarManager(DBManager):
                         FROM Fields
                         WHERE field_id = {0};
                         """.format(field_id)
-                field_ra, field_dec \
-                        = self._query(connection, query).fetchone()
+                result = self._query(connection, query).fetchone()
+                field_ra = result['center_ra']
+                field_dec = result['center_dec']
 
                 # calculate separation:
                 field_coord = SkyCoord(field_ra, field_dec, unit='rad')
@@ -2005,11 +2021,11 @@ class GuidestarManager(DBManager):
             results = self._query(connection, query).fetchall()
             field_ids = {'none': [], 'inactive': []}
 
-            for field_id, result in results:
-                if result == 0:
-                    field_ids['inactive'].append(field_id)
-                elif result is None:
-                    field_ids['none'].append(field_id)
+            for result in results:
+                if result['active'] == 0:
+                    field_ids['inactive'].append(result['field_id'])
+                elif result['active'] is None:
+                    field_ids['none'].append(result['field_id'])
                 else:
                     raise ValueError("This should not happen!")
 
@@ -2064,16 +2080,15 @@ class GuidestarManager(DBManager):
 
         if guidestars.shape[0]:
             n_tot = guidestars.shape[0]
-            n_active = guidestars.loc[:, 4].sum()
+            n_active = guidestars.loc[:, 'active'].sum()
             n_inactive = n_tot - n_active
-            sel = guidestars.loc[:, 4] == 1
-            n_fields = guidestars.loc[sel, 1].unique().shape[0]
+            sel = guidestars.loc[:, 'active'] == 1
+            n_fields = guidestars.loc[sel, 'field_id'].unique().shape[0]
         else:
             n_tot = 0
             n_active = 0
             n_inactive = 0
             n_fields = 0
-
 
         print('============ GUIDESTARS ===========')
 
@@ -2156,9 +2171,9 @@ class ObservationManager(DBManager):
                 FROM Filters
                 WHERE filter='{0}';
                 """.format(filter_name)
-            results = self._query(connection, query).fetchall()
+            result = self._query(connection, query).fetchone()
 
-        if len(results) == 0:
+        if not result:
             userin = input(
                     f"Filter '{filter_name} does not exist. Add it to data " \
                     "base? (y/n)")
@@ -2169,7 +2184,7 @@ class ObservationManager(DBManager):
                 filter_id = False
 
         else:
-            filter_id = results[0][0]
+            filter_id = result['filter_id']
 
         return filter_id
 
@@ -2209,7 +2224,7 @@ class ObservationManager(DBManager):
         # prepare field IDs:
         if field_id is None:
             field_manager = FieldManager(self.db_file)
-            field_id = [field[0] for field in
+            field_id = [field['field_id'] for field in
                         field_manager.get_fields(
                             telescope=telescope, active=True)]
         elif isinstance(field_id, int):
@@ -2268,7 +2283,7 @@ class ObservationManager(DBManager):
             if filt not in filter_ids.keys():
                 filter_id = self.get_filter_id(filt)
 
-                # stop, if the filter did not exist and was not added:
+                # stop, if the filter does not exist and is not added:
                 if filter_id is False:
                     print("Filter was not added to database. No " \
                           "observations are added either.")
@@ -2279,9 +2294,10 @@ class ObservationManager(DBManager):
             # check if observation entry exists:
             if check_existence:
                 observations = self.get_observations(
-                        field, exp, rep, filter_ids[filt])
+                        field_id=field, exposure=exp, repetitions=rep,
+                        filter_name=filt)
                 n_obs = len(observations)
-                n_done = len([1 for obs in observations if obs[6]])
+                n_done = len([1 for obs in observations if obs['done']])
 
                 if n_obs > n_done and skip_existing:
                     continue
@@ -2306,15 +2322,16 @@ class ObservationManager(DBManager):
                         continue
 
             # add to data:
-            data.append((field, exp, rep, filter_ids[filt], False, False))
+            data.append(
+                    (field, exp, rep, filter_ids[filt], False, False, True))
 
         # add to data base:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 INSERT INTO Observations (
-                    field_id, exposure, repetitions, filter_id, scheduled,
-                    done)
-                VALUES (?, ?, ?, ?, ?, ?);
+                    field_id, exposure, repetitions, filter_id, done,
+                    scheduled, active)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
                 """
             self._query(connection, query, many=data, commit=True)
 
@@ -2322,42 +2339,120 @@ class ObservationManager(DBManager):
         print(f"{n_obs} observations added to data base.")
 
     #--------------------------------------------------------------------------
-    def get_observations(self, field_id, exposure, repetitions, filter_id):
+    def get_observations(
+            self, field_id=None, exposure=None, repetitions=None,
+            filter_name=None, active=True):
         # TODO: make all these parameters optional
         """Query an observation from the database.
 
         Parameters
         ----------
-        field_id : int
-            ID of the associated field.
-        exposure : float
-            Exposure time in seconds.
-        repetitions : int
-            Number of repetitions.
-        filter_id : int
-            Filter ID.
+        field_id : int or None, optional
+            ID of the associated field. The default is None.
+        exposure : float or None, optional
+            Exposure time in seconds. The default is None.
+        repetitions : int or None, optional
+            Number of repetitions. The default is None.
+        filter_name : str or None, optional
+            Filter name.
+        active = bool or None
+            If True, only search for active observations. If False, only search
+            for inactive observations. If None, search for observations
+            regardless of whether they are active or not. The default is True.
 
         Returns
         -------
-        results : list of tuples
-            The list is empty if no observation was found. Otherwise, the list
-            contains one tuple. The tuple contains the observation ID, field
-            ID, exposure time in seconds, number of repetitions, filter_id,
-            its scheduling status, its observation status, the datetime of
-            the observation if it was finished.
+        results : list of dict
+            Each list item is a dict with observation parameters. The list is
+            empty if no observation was found matching the criteria.
         """
 
+        # define SQL WHERE conditions:
+        where_clauses = []
+
+        if field_id is None:
+            pass
+        elif isinstance(field_id, int):
+            where_clause = f'field_id = {field_id}'
+            where_clauses.append(where_clause)
+        else:
+            raise ValueError("`field_id` must be int or None.")
+
+        if exposure is None:
+            pass
+        elif type(exposure) in [float, int]:
+            where_clause = f'exposure = {exposure}'
+            where_clauses.append(where_clause)
+        else:
+            raise ValueError("`exposure` must be float or None.")
+
+        if repetitions is None:
+            pass
+        elif isinstance(repetitions, int):
+            where_clause = f'repetitions = {repetitions}'
+            where_clauses.append(where_clause)
+        else:
+            raise ValueError("`repetitions` must be int or None.")
+
+        if filter_name is None:
+            pass
+        elif isinstance(filter_name, str):
+            where_clause = f"filter = '{filter_name}'"
+            where_clauses.append(where_clause)
+        else:
+            raise ValueError("`filter_name` must be str or None.")
+
+        if active is None:
+            pass
+        elif active:
+            where_clause = 'active = TRUE'
+            where_clauses.append(where_clause)
+        else:
+            where_clause = 'active = FALSE'
+            where_clauses.append(where_clause)
+
+        if where_clauses:
+            where_clause = ' AND '.join(where_clauses)
+            where_clause = f'WHERE ({where_clause})'
+        else:
+            where_clause = ''
+
+        # query:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT *
-                FROM Observations
-                WHERE (
-                    field_id={0} AND exposure={1} AND repetitions={2}
-                    AND filter_id={3});
-                """.format(field_id, exposure, repetitions, filter_id)
+                SELECT observation_id, field_id, exposure, repetitions, filter,
+                    done, scheduled, active, date_done
+                FROM Observations AS o
+                LEFT JOIN Filters AS f
+                ON o.filter_id = f.filter_id
+                {0}
+                """.format(where_clause)
             results = self._query(connection, query).fetchall()
 
         return results
+
+    #--------------------------------------------------------------------------
+    def deactivate(self, observation_ids):
+
+        if isinstance(observation_ids, int):
+            observation_ids = [observation_ids]
+        elif type(observation_ids) in [list, tuple]:
+            pass
+        else:
+            raise ValueError("`observation_ids` must be int or list.")
+
+        with SQLiteConnection(self.db_file) as connection:
+            for observation_id in observation_ids:
+                query = """\
+                    UPDATE Observations
+                    SET active=FALSE
+                    WHERE observation_id={0}
+                    """.format(observation_id)
+                self._query(connection, query, commit=False)
+
+            connection.commit()
+
+        print(f'Deactivated {len(observation_ids)} observations.')
 
 #==============================================================================
 
@@ -2424,14 +2519,7 @@ class ObservabilityManager(DBManager):
         """
 
         # status to status ID conversion:
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                SELECT *
-                FROM ObservabilityStatus;
-                """
-            results = self._query(connection, query).fetchall()
-
-        status_to_id = {k: i for i, k in results}
+        status_to_id = self.status_to_id_converter()
 
         # prepare data:
         data = []
@@ -2591,11 +2679,11 @@ class ObservabilityManager(DBManager):
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
-            SELECT MIN(jd_next)
+            SELECT MIN(jd_next) AS jd
             FROM TimeRanges
             WHERE active=1
             """
-            jd = self._query(connection, query).fetchall()[0][0]
+            jd = self._query(connection, query).fetchone()['jd']
 
         return jd
 
@@ -2604,22 +2692,22 @@ class ObservabilityManager(DBManager):
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
-            SELECT MAX(observability_id)
+            SELECT MAX(observability_id) AS id
             FROM Observability
             """
-            highest_id = self._query(connection, query).fetchall()[0][0]
+            highest_id = self._query(connection, query).fetchone()['id']
             next_id = 1 if highest_id is None else highest_id + 1
 
         return next_id
 
     #--------------------------------------------------------------------------
-    def get_status(self):
-        """Get status ID and corresponding status.
+    def status_to_id_converter(self):
+        """Get dict that converts status to status ID.
 
         Returns
         -------
-        results : list of tuples
-            Each entry contains an ID and its corresponding status string.
+        status_to_id : dict
+            Dict with statuses as keys and corresponnding IDs as values.
         """
 
         with SQLiteConnection(self.db_file) as connection:
@@ -2629,7 +2717,12 @@ class ObservabilityManager(DBManager):
                 """
             results = self._query(connection, query).fetchall()
 
-        return results
+            status_to_id = {}
+
+            for result in results:
+                status_to_id[result['status']] = result['status_id']
+
+        return status_to_id
 
     #--------------------------------------------------------------------------
     def get_obs_window_durations(self, field_id, jd_start, jd_stop):
@@ -2839,9 +2932,10 @@ class DBCreator(DBManager):
                     repetitions int,
                     filter_id int
                         REFERENCES Filters (filter_id),
-                    scheduled bool,
                     done bool,
-                    date date);
+                    scheduled bool,
+                    active bool,
+                    date_done date);
                 """
             self._query(connection, query, commit=True)
             print("Table 'Observations' created.")

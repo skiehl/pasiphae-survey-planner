@@ -36,8 +36,8 @@ class Field:
     #--------------------------------------------------------------------------
     def __init__(
             self, fov, center_ra, center_dec, tilt=0., field_id=None,
-            jd_first_obs_window=None, jd_next_obs_window=None, n_obs_tot=0,
-            n_obs_done=0, n_obs_pending=0):
+            jd_first_observability=None, jd_next_observability=None,
+            n_obs_tot=0, n_obs_done=0, n_obs_pending=0):
         """A field in the sky.
 
         Parameters
@@ -53,10 +53,10 @@ class Field:
             parallel to the horizon. The default is 0..
         field_id : int, optional
             ID of the field. The default is None.
-        jd_first_obs_window : float, optional
+        jd_first_observability : float, optional
             The earliest Julian date for which an observing window was
             calculated for this field. The default is None.
-        jd_next_obs_window : float, optional
+        jd_next_observability : float, optional
             The latest Julian date for which an observing window was calculated
             for this field. The default is None.
         n_obs_tot : int, optional
@@ -80,8 +80,8 @@ class Field:
         self.center_ra = self.center_coord.ra
         self.center_dec = self.center_coord.dec
         self.tilt = Angle(tilt, unit='rad')
-        self.jd_first_obs_window = jd_first_obs_window
-        self.jd_next_obs_window = jd_next_obs_window
+        self.jd_first_observability = jd_first_observability
+        self.jd_next_observability = jd_next_observability
         self.obs_windows = []
         self.status = 0
         self.setting_in = -1
@@ -594,17 +594,14 @@ class SurveyPlanner:
         self.twilight = None
 
     #--------------------------------------------------------------------------
-    def _setup_telescope(self, telescope_name, no_constraints=False):
+    def _setup_telescope(self, telescope):
         """Load telescope parameters from database and add Telescope instance
         to SurveyPlanner.
 
         Parameters
         ----------
-        telescope_name : str
-            Telescope name as stored in the database.
-        no_constraints : bool, optional
-            If True, no constraints are loaded from the database and added to
-            the telescope. The default is False.
+        telescope : dict
+            Telescope parameters as returned by `db.get_telescopes()`.
 
         Returns
         -------
@@ -612,24 +609,15 @@ class SurveyPlanner:
             Parameter set ID corresponding to the used constraints.
         """
 
-        # connect to database:
-        db = TelescopeManager(self.dbname)
-
         # create telescope:
-        telescope = db.get_telescopes(telescope_name)
         self.telescope = Telescope(
-                telescope['lat'], telescope['lon'], telescope['height'],
-                telescope['utc_offset'], name=telescope['name'])
-
-        # load twilight, but skip loading other constraints:
-        if no_constraints:
-            parameter_set_id, constraints = db.get_constraints(
-                    telescope=telescope_name, active=True)['constraints']
-            self.twilight = constraints['Twilight']['twilight']
-            return None
+                telescope['lat']*u.rad, telescope['lon']*u.rad,
+                telescope['height'], telescope['utc_offset'],
+                name=telescope['name'])
+        parameter_set_id = telescope['parameter_set_id']
 
         # read constraints:
-        parameter_set_id, constraints = db.get_constraints(telescope_name)
+        constraints = telescope['constraints']
         self.twilight = constraints['Twilight']['twilight']
         del constraints['Twilight']
 
@@ -657,14 +645,14 @@ class SurveyPlanner:
         return parameter_set_id
 
     #--------------------------------------------------------------------------
-    def _tuple_to_field(self, field_tuple):
-        """Convert a tuple that contains field information as queried from the
+    def _dict_to_field(self, field_dict):
+        """Convert a dict that contains field information as queried from the
         database to a Field instance.
 
         Parameters
         ----------
-        field_tuple : tuple
-            Tuple as returned e.g. by db.get_fields().
+        field_dict : dict
+            Dict as returned by db.get_fields().
 
         Returns
         -------
@@ -672,14 +660,21 @@ class SurveyPlanner:
             A field instance created from the database entries.
         """
 
-        field_id, fov, center_ra, center_dec, tilt, __, __, \
-                jd_first_obs_window, jd_next_obs_window, n_obs_tot, \
-                n_obs_done, n_obs_pending = field_tuple
+        field_id = field_dict['field_id']
+        fov = field_dict['fov']
+        center_ra = field_dict['center_ra']
+        center_dec = field_dict['center_dec']
+        tilt = field_dict['tilt']
+        jd_first = field_dict['jd_first']
+        jd_next = field_dict['jd_next']
+        n_obs_tot = field_dict['nobs_tot']
+        n_obs_done = field_dict['nobs_done']
+        n_obs_pending = field_dict['nobs_pending']
         field = Field(
             fov, center_ra, center_dec, tilt, field_id=field_id,
-            jd_first_obs_window=jd_first_obs_window,
-            jd_next_obs_window=jd_next_obs_window, n_obs_tot=n_obs_tot,
-            n_obs_done=n_obs_done, n_obs_pending=n_obs_pending)
+            jd_first_observability=jd_first, jd_next_observability=jd_next,
+            n_obs_tot=n_obs_tot, n_obs_done=n_obs_done,
+            n_obs_pending=n_obs_pending)
 
         return field
 
@@ -737,7 +732,7 @@ class SurveyPlanner:
         fields = db.iter_fields(telescope=telescope, active=active)
 
         for __, __, field in fields:
-            field = self._tuple_to_field(field)
+            field = self._dict_to_field(field)
 
             yield field
 
@@ -808,7 +803,7 @@ class SurveyPlanner:
             if len(obs_windows) == 0:
                 continue
 
-            field = self._tuple_to_field(field)
+            field = self._dict_to_field(field)
             obs_windows = self._tuples_to_obs_windows(obs_windows)
             field.add_obs_window(obs_windows)
             date = night + 1. * u.d - utc_offset
@@ -867,7 +862,7 @@ class SurveyPlanner:
             if len(obs_windows) == 0:
                 continue
 
-            field = self._tuple_to_field(field)
+            field = self._dict_to_field(field)
             obs_windows = self._tuples_to_obs_windows(obs_windows)
             field.add_obs_window(obs_windows)
             self._set_field_status(
@@ -1027,8 +1022,8 @@ class SurveyPlanner:
 
         Parameters
         ----------
-        db : db.DBConnectorSQLite
-            Active database connection.
+        db : db.ObservabilityManager
+            Observability manager database connection.
         date_stop : astropy.time.Time
             The stop date and time of the observing window calculation.
         date_start : astropy.time.Time
@@ -1138,8 +1133,8 @@ class SurveyPlanner:
         queue_obs_windows : multiprocessing.managers.AutoProxy[Queue]
             Queue containing the observing windows.
         queue_field_ids : multiprocessing.managers.AutoProxy[Queue]
-            Queue containing the IDs of fields whose `jd_next_obs_window` value
-            needs to be updated.
+            Queue containing the IDs of fields whose `jd_next_observability`
+            value needs to be updated.
         n : int
             Number of entries to read from the queue.
         duration_limit : astropy.time.TimeDelta
@@ -1150,7 +1145,7 @@ class SurveyPlanner:
         -------
         batch_field_ids : list of int
             IDs of the fields for Observability table entries and updating
-            `jd_next_obs_window` value.
+            `jd_next_observability` value.
         batch_dates : list of float
             Current JD for Observability table entries.
         batch_status : list of str
@@ -1225,8 +1220,8 @@ class SurveyPlanner:
 
         Parameters
         ----------
-        db : db.DBConnectorSQLite
-            Active database connection.
+        db : db.ObservabilityManager
+            Observability manager database connection.
         counter : multiprocessing.managers.ValueProxy
             Counter that stores how many fields have been processed.
         queue_obs_windows : multiprocessing.managers.AutoProxy[Queue]
@@ -1353,7 +1348,7 @@ class SurveyPlanner:
         """
 
         # skip if this field was already covered for this JD:
-        if not init and field.jd_next_obs_window > jd:
+        if not init and field.jd_next_observability > jd:
             pass
 
         # get observing windows and add them to queue:
@@ -1367,7 +1362,7 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _add_obs_windows(
-            self, fields, init, telescope_name, date_stop, date_start,
+            self, fields, init, telescope, date_stop, date_start,
             duration_limit, batch_write, processes, time_interval_init,
             time_interval_refine, agreed_to_gaps):
         """
@@ -1381,8 +1376,8 @@ class SurveyPlanner:
             If True, observing windows are calculated for these fields for the
             first time, which requires some additional action. Otherwise, new
             observing windows are appended.
-        telescope_name : str
-            Telescope name as stored in the database.
+        telescope : dict
+            Telescope data as returned by `db.get_telescopes()`.
         date_stop : astropy.time.Time
             The date until which observing windows should be calculated.
         date_start : astropy.time.Time
@@ -1445,7 +1440,7 @@ class SurveyPlanner:
             return None
 
         # setup telescope with constraints:
-        parameter_set_id = self._setup_telescope(telescope_name)
+        parameter_set_id = self._setup_telescope(telescope)
 
         # get time range for observing window calculation:
         if init:
@@ -1617,7 +1612,7 @@ class SurveyPlanner:
         """
 
         # status string to status ID converter:
-        status_to_id = {value: key for (key, value) in db.get_status()}
+        status_to_id = db.status_to_id_converter()
 
         done = False
 
@@ -2125,7 +2120,7 @@ class SurveyPlanner:
         for field in db.get_fields(
                 telescope=telescope, observed=observed, pending=pending,
                 active=active):
-            yield self._tuple_to_field(field)
+            yield self._dict_to_field(field)
 
     #--------------------------------------------------------------------------
     def get_fields(
@@ -2151,10 +2146,10 @@ class SurveyPlanner:
             If True, only get active fields. If False, only get inactive
             fields. If None, get fields active or not. The default is True.
 
-        Yields
-        ------
-        field : list of Field
-            Field(s) fulfilling the selected criteria.
+        Returns
+        -------
+        results : list of dict
+            Each list item is a dict with the field parameters.
         """
 
         fields = [field for field in self.iter_fields(
@@ -2195,7 +2190,7 @@ class SurveyPlanner:
         if not len(field):
             raise ValueError(f"Field with ID {field_id} does not exist.")
 
-        field = self._tuple_to_field(field[0])
+        field = self._dict_to_field(field[0])
 
         return field
 
@@ -2415,15 +2410,16 @@ class SurveyPlanner:
 
         # get telescopes from database:
         telescope_manager = TelescopeManager(self.dbname)
-        telescope_names = telescope_manager.get_telescope_names()
-        n_tel = len(telescope_names)
+        telescopes = telescope_manager.get_telescopes(constraints=True)
+        n_tel = len(telescopes)
         del telescope_manager
 
         jd_stop = date_stop.jd
         agreed_to_gaps = None
 
         # iterate through observatories:
-        for i, telescope_name in enumerate(telescope_names, start=1):
+        for i, telescope in enumerate(telescopes, start=1):
+            telescope_name = telescope['name']
             print(f'\nTelescope {i} of {n_tel} selected: {telescope_name}')
 
             # get fields that need observing window calculations:
@@ -2436,18 +2432,18 @@ class SurveyPlanner:
             del field_manager
 
             with Pool(processes=processes) as pool:
-                    fields_init = pool.map(self._tuple_to_field, fields_init)
-                    fields_tbd = pool.map(self._tuple_to_field, fields_tbd)
+                    fields_init = pool.map(self._dict_to_field, fields_init)
+                    fields_tbd = pool.map(self._dict_to_field, fields_tbd)
 
             # calculate observing windows for new fields:
             agreed_to_gaps = self._add_obs_windows(
-                    fields_init, True, telescope_name, date_stop,
+                    fields_init, True, telescope, date_stop,
                     date_start, duration_limit, batch_write, processes,
                     time_interval_init, time_interval_refine, agreed_to_gaps)
 
             # calculate observing windows for fields:
             agreed_to_gaps = self._add_obs_windows(
-                    fields_tbd, False, telescope_name, date_stop,
+                    fields_tbd, False, telescope, date_stop,
                     date_start, duration_limit, batch_write, processes,
                     time_interval_init, time_interval_refine, agreed_to_gaps)
 
