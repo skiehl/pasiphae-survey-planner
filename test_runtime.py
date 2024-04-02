@@ -6,7 +6,7 @@ import astropy.units as u
 from itertools import product
 import os
 import platform
-from surveyplanner import SurveyPlanner
+from ObservabilityPlanner import ObservabilityPlanner
 
 #==============================================================================
 # CONFIG
@@ -82,7 +82,7 @@ if __name__ == '__main__':
                     raise ValueError('Unknown operating system.')
 
             timeit_start = Time.now()
-            planner = SurveyPlanner(db_name)
+            planner = ObservabilityPlanner(db_name)
             planner.check_observability(
                     date_stop, date_start=date_start, duration_limit=5*u.min,
                     processes=processes, batch_write=batch_write,

@@ -571,13 +571,13 @@ class Telescope:
 
 #==============================================================================
 
-class SurveyPlanner:
-    """Pasiphae survey planner.
+class ObservabilityPlanner:
+    """Observability planner: Determine when fields are observable.
     """
 
     #--------------------------------------------------------------------------
     def __init__(self, dbname):
-        """Create SurveyPlanner instance.
+        """Create ObservabilityPlanner instance.
 
         Parameters
         ----------
@@ -592,6 +592,40 @@ class SurveyPlanner:
         self.dbname = dbname
         self.telescope = None
         self.twilight = None
+
+    #--------------------------------------------------------------------------
+    def _dict_to_field(self, field_dict):
+        """Convert a dict that contains field information as queried from the
+        database to a Field instance.
+
+        Parameters
+        ----------
+        field_dict : dict
+            Dict as returned by db.get_fields().
+
+        Returns
+        -------
+        field : Field
+            A field instance created from the database entries.
+        """
+
+        field_id = field_dict['field_id']
+        fov = field_dict['fov']
+        center_ra = field_dict['center_ra']
+        center_dec = field_dict['center_dec']
+        tilt = field_dict['tilt']
+        jd_first = field_dict['jd_first']
+        jd_next = field_dict['jd_next']
+        n_obs_tot = field_dict['nobs_tot']
+        n_obs_done = field_dict['nobs_done']
+        n_obs_pending = field_dict['nobs_pending']
+        field = Field(
+            fov, center_ra, center_dec, tilt, field_id=field_id,
+            jd_first_observability=jd_first, jd_next_observability=jd_next,
+            n_obs_tot=n_obs_tot, n_obs_done=n_obs_done,
+            n_obs_pending=n_obs_pending)
+
+        return field
 
     #--------------------------------------------------------------------------
     def _setup_telescope(self, telescope):
@@ -643,325 +677,6 @@ class SurveyPlanner:
             self.telescope.add_constraint(constraint)
 
         return parameter_set_id
-
-    #--------------------------------------------------------------------------
-    def _dict_to_field(self, field_dict):
-        """Convert a dict that contains field information as queried from the
-        database to a Field instance.
-
-        Parameters
-        ----------
-        field_dict : dict
-            Dict as returned by db.get_fields().
-
-        Returns
-        -------
-        field : Field
-            A field instance created from the database entries.
-        """
-
-        field_id = field_dict['field_id']
-        fov = field_dict['fov']
-        center_ra = field_dict['center_ra']
-        center_dec = field_dict['center_dec']
-        tilt = field_dict['tilt']
-        jd_first = field_dict['jd_first']
-        jd_next = field_dict['jd_next']
-        n_obs_tot = field_dict['nobs_tot']
-        n_obs_done = field_dict['nobs_done']
-        n_obs_pending = field_dict['nobs_pending']
-        field = Field(
-            fov, center_ra, center_dec, tilt, field_id=field_id,
-            jd_first_observability=jd_first, jd_next_observability=jd_next,
-            n_obs_tot=n_obs_tot, n_obs_done=n_obs_done,
-            n_obs_pending=n_obs_pending)
-
-        return field
-
-    #--------------------------------------------------------------------------
-    def _tuples_to_obs_windows(self, obs_windows_tuples):
-        """Convert a tuple that contains observation window information as
-        queried from the database to an ObsWindow instance.
-
-        Parameters
-        ----------
-        obs_windows_tuples : tuple
-            Tuple as returned e.g. by db.get_obs_windows_from_to().
-
-        Returns
-        -------
-        obs_windows : ObsWindow
-            Observation window.
-        """
-
-        obs_windows = []
-
-        for obs_window_tuple in obs_windows_tuples:
-            obs_window_id, __, date_start, date_stop, __, __ = \
-                    obs_window_tuple
-            date_start = Time(date_start)
-            date_stop = Time(date_stop)
-            obs_window = ObsWindow(
-                    date_start, date_stop, obs_window_id=obs_window_id)
-            obs_windows.append(obs_window)
-
-        return obs_windows
-
-    #--------------------------------------------------------------------------
-    def _iter_fields(self, telescope=None, active=True):
-        """Connect to database and iterate through fields.
-
-        Parameters
-        ----------
-        telescope : str, optional
-            Iterate only through fields associated with this telescope name.
-            Otherwise, iterate through all fields. The default is None.
-        active : bool, optional
-            If True, only iterate through active fields. If False, only iterate
-            through inactive fields. If None, iterate through all fields. The
-            default is True.
-
-        Yields
-        ------
-        field : Field
-            Fields as stored in the database.
-        """
-
-        # read fields from database:
-        db = DBConnectorSQLite(self.dbname)
-        fields = db.iter_fields(telescope=telescope, active=active)
-
-        for __, __, field in fields:
-            field = self._dict_to_field(field)
-
-            yield field
-
-    #--------------------------------------------------------------------------
-    def _iter_observable_fields_by_night(
-            self, telescope, night, observed=None, pending=None,
-            active=True):
-        """Iterate through fields observable during a given night, given
-        specific selection criteria.
-
-        Parameters
-        ----------
-        telescope : str
-            Telescope name.
-        night : astropy.time.Time
-            Iterate through fields observable during the night that starts on
-            the specified day. Time information is truncated.
-        observed : bool or None, optional
-            If True, iterate only through fields that have been observed at
-            least once. If False, iterate only through fields that have never
-            been observed. If None, iterate through fields irregardless of
-            whether they have  been observed or not. The default is None.
-        pending : bool or None, optional
-            If True, iterate only through fields that have pending observations
-            associated. If False, only iterate through fields that have no
-            pending observations associated. If None, iterate through fields
-            irregardless of whether they have pending observations associated
-            or not. The default is None.
-        active : bool or None, optional
-            If True, only iterate through active fields. If False, only iterate
-            through inactive fields. If None, iterate through fields active or
-            not. The default is True.
-
-        Yields
-        ------
-        field : Field
-            Field(s) fulfilling the selected criteria.
-        """
-
-        # check that night input is date only:
-        if night.iso[11:] != '00:00:00.000':
-            print("WARNING: For argument 'night' provide date only. " \
-                  "Time information is stripped. To get fields " \
-                  "observable at specific time use 'time' argument.")
-            night = Time(night.iso[:10])
-
-        # connect to database:
-        db = DBConnectorSQLite(self.dbname)
-
-        # get telescope information:
-        telescope_name = telescope
-        telescope = db.get_telescopes(telescope)
-        utc_offset = telescope['utc_offset'] * u.h
-
-        # get local noon of current and next day in UTC:
-        noon_current = night + 12 * u.h - utc_offset
-        noon_next = night + 36 * u.h - utc_offset
-        # NOTE: ignoring daylight saving time
-
-        # iterate through fields:
-        for __, __, field in db.iter_fields(
-                telescope=telescope_name, observed=observed,
-                pending=pending, active=active):
-            field_id = field[0]
-            obs_windows = db.get_obs_windows_from_to(
-                    field_id, noon_current, noon_next)
-
-            if len(obs_windows) == 0:
-                continue
-
-            field = self._dict_to_field(field)
-            obs_windows = self._tuples_to_obs_windows(obs_windows)
-            field.add_obs_window(obs_windows)
-            date = night + 1. * u.d - utc_offset
-            self._set_field_status(
-                    field, date, days_before=3, days_after=7)
-
-            yield field
-
-    #--------------------------------------------------------------------------
-    def _iter_observable_fields_by_datetime(
-            self, telescope, datetime, observed=None, pending=None,
-            active=True):
-        """Iterate through fields observable during a given night, given
-        specific selection criteria.
-
-        Parameters
-        ----------
-        telescope : str
-            Telescope name.
-        datetime : astropy.time.Time
-            Iterate through fields that are observable at the given time.
-        observed : bool or None, optional
-            If True, iterate only through fields that have been observed at
-            least once. If False, iterate only through fields that have never
-            been observed. If None, iterate through fields irregardless of
-            whether they have  been observed or not. The default is None.
-        pending : bool or None, optional
-            If True, iterate only through fields that have pending observations
-            associated. If False, only iterate through fields that have no
-            pending observations associated. If None, iterate through fields
-            irregardless of whether they have pending observations associated
-            or not. The default is None.
-        active : bool or None, optional
-            If True, only iterate through active fields. If False, only iterate
-            through inactive fields. If None, iterate through fields active or
-            not. The default is True.
-
-        Yields
-        ------
-        field : Field
-            Field(s) fulfilling the selected criteria.
-        """
-
-        # connect to database:
-        db = DBConnectorSQLite(self.dbname)
-        telescope_name = telescope
-
-        # iterate through fields:
-        for __, __, field in db.iter_fields(
-                telescope=telescope_name, observed=observed,
-                pending=pending, active=active):
-            field_id = field[0]
-            obs_windows = db.get_obs_windows_by_datetime(
-                    field_id, datetime)
-
-            if len(obs_windows) == 0:
-                continue
-
-            field = self._dict_to_field(field)
-            obs_windows = self._tuples_to_obs_windows(obs_windows)
-            field.add_obs_window(obs_windows)
-            self._set_field_status(
-                    field, datetime, days_before=3, days_after=7)
-
-            yield field
-
-    #--------------------------------------------------------------------------
-    def _get_obs_window_durations(self, db, field_id, jd_start, jd_stop):
-        """Get observability window durations of a specific field between two
-        dates.
-
-        Parameters
-        ----------
-        db : db.DBConnectorSQLite
-            Active database connection.
-        field_id : int
-            Field ID.
-        jd_start : float
-            Query observing windows from this JD on.
-        jd_stop : float
-            Query observing windows up to this JD.
-
-        Returns
-        -------
-        durations : pandas.DataFrame
-            Containts the queried durations and columns for further processing.
-        """
-
-        durations = db.get_obs_window_durations(field_id, jd_start, jd_stop)
-        durations = DataFrame(
-                durations, columns=(
-                    'observability_id', 'jd', 'status', 'duration')
-                )
-        durations = durations.groupby(
-                ['observability_id', 'jd', 'status']).sum()
-        durations.reset_index(inplace=True)
-        durations['setting_in'] = \
-                np.zeros(durations.shape[0]) * np.nan
-        durations['update'] = np.zeros(durations.shape[0], dtype=bool)
-
-        return durations
-
-    #--------------------------------------------------------------------------
-    def _update_unknown_status(self, durations):
-        """Update the status where unknown, if possible.
-
-        Parameters
-        ----------
-        durations : pandas.DataFrame
-            Observing window durations and status information.
-
-        Notes
-        -------
-        Changes are done inplace, therefore the dataframe does not have to be
-        returned.
-        """
-
-        # identify blocks with unknown status:
-        sel_unk = durations['status'] == 'unknown'
-
-        # iterate through these blocks in reverse order:
-        for i0, i1 in true_blocks(sel_unk)[::-1]:
-
-            # skip blocks at the end:
-            if i1 == durations.shape[0] - 1:
-                continue
-
-            # otherwise, update status based on next status that is not
-            # 'not observable':
-            for j in range(1, 5):
-                # try to get next status, break if no more are available:
-                try:
-                    status = durations['status'][i1+j]
-                except KeyError:
-                    break
-
-                # if status is 'not observable', go to next status:
-                if status == 'not observable':
-                    continue
-
-                # update status:
-                if status != 'unknown':
-                    durations.loc[i0:i1, 'status'] = status
-                    durations.loc[i0:i1, 'update'] = True
-
-                # extrapolate setting duration, if needed:
-                if status == 'setting':
-                    setting_in = durations['setting_in'][i1+j] + j - 1
-                    setting_in += np.arange(i1 - i0 + 1, 0, -1)
-                    durations.loc[i0:i1, 'setting_in'] = setting_in
-
-                break
-
-            # all next statuses are 'not observable', set to 'setting':
-            else:
-                durations.loc[i0:i1, 'status'] = 'setting'
-                durations.loc[i0:i1, 'update'] = True
-                durations.loc[i0:i1, 'setting_in'] = np.arange(i1 - i0, -1, -1)
 
     #--------------------------------------------------------------------------
     def _obs_window_time_range_init(self, date_stop, date_start):
@@ -1655,111 +1370,97 @@ class SurveyPlanner:
         print('\rProgress: done                                              ')
 
     #--------------------------------------------------------------------------
-    def _detect_outliers(self, jd, duration, outlier_threshold=0.6):
-        """Outlier detection using Cook's distance.
+    def _get_obs_window_durations(self, db, field_id, jd_start, jd_stop):
+        """Get observability window durations of a specific field between two
+        dates.
 
         Parameters
         ----------
-        jd : array-like
-            JD.
-        duration : array-like
-            Durations of the observing windows for each JD.
-        outlier_threshold : float, optional
-            Threshold for outlier detection. Data points with a Cook's distance
-            p-value lower than this threshold are considered outliers. The
-            default is 0.6.
+        db : db.DBConnectorSQLite
+            Active database connection.
+        field_id : int
+            Field ID.
+        jd_start : float
+            Query observing windows from this JD on.
+        jd_stop : float
+            Query observing windows up to this JD.
 
         Returns
         -------
-        outliers : numpy.ndarray (dtype: bool)
-            True, for detected outliers. False, otherwise.
-
-        Notes
-        -----
-        - This method is called by `_update_status_for_field()`.
+        durations : pandas.DataFrame
+            Containts the queried durations and columns for further processing.
         """
 
-        x = np.asarray(jd)
-        y = np.asarray(duration)
+        durations = db.get_obs_window_durations(field_id, jd_start, jd_stop)
+        durations = DataFrame(
+                durations, columns=(
+                    'observability_id', 'jd', 'status', 'duration')
+                )
+        durations = durations.groupby(
+                ['observability_id', 'jd', 'status']).sum()
+        durations.reset_index(inplace=True)
+        durations['setting_in'] = \
+                np.zeros(durations.shape[0]) * np.nan
+        durations['update'] = np.zeros(durations.shape[0], dtype=bool)
 
-        # linear regression:
-        x = add_constant(x)
-        model = OLS(y, x).fit()
-
-        # check for outliers:
-        influence = model.get_influence()
-        __, cooks_pval = influence.cooks_distance
-        outliers = cooks_pval < outlier_threshold
-
-        return outliers
+        return durations
 
     #--------------------------------------------------------------------------
-    def _get_status(
-            self, jd, jds, durations, time_interval, status_threshold=6,
-            mask_outl=None):
-        """Status based on linear ordinary least square regression with
-        exclusion of outliers.
+    def _update_unknown_status(self, durations):
+        """Update the status where unknown, if possible.
 
         Parameters
         ----------
-        jd : float
-            JD of the date of interest.
-        jds : array-like
-            JDs of the observing windows.
-        durations : array-like
-            Durations of the observing windows for each JD.
-        time_interval : astropy.time.TimeDelta
-            Time accuracy at which the observing windows were calculated. The
-            status is considered "plateauing" if the standard deviation
-            of the durations is smaller than this time interval times the
-            status_threshold.
-        status_threshold : float, optional
-            Scaling factor. See description of time_interval. The default is 6.
-        mask_outl : numpy.ndarray (dtype: bool) or None, optional
-            If given, Trues mark outliers that are removed from the OLS. The
-            default is None.
-
-        Returns
-        -------
-        status : str
-            Either "rising", "plateauing", or "setting".
-        setting_in : float
-            If the status is "setting" this is the duration in days, when the
-            field is setting. Otherwise a numpy.nan is returned.
+        durations : pandas.DataFrame
+            Observing window durations and status information.
 
         Notes
-        -----
-        - This method is called by `_update_status_for_field()`.
+        -------
+        Changes are done inplace, therefore the dataframe does not have to be
+        returned.
         """
 
-        x = np.asarray(jds)
-        y = np.asarray(durations)
+        # identify blocks with unknown status:
+        sel_unk = durations['status'] == 'unknown'
 
-        # remove outliers:
-        if mask_outl is not None:
-            x = x[~mask_outl]
-            y = y[~mask_outl]
+        # iterate through these blocks in reverse order:
+        for i0, i1 in true_blocks(sel_unk)[::-1]:
 
-        # get status:
-        if y.std() <= time_interval.value * status_threshold:
-            status = 'plateauing'
-            setting_in = np.nan
+            # skip blocks at the end:
+            if i1 == durations.shape[0] - 1:
+                continue
 
-        elif np.median(np.diff(y)) > 0:
-            status = 'rising'
-            setting_in = np.nan
+            # otherwise, update status based on next status that is not
+            # 'not observable':
+            for j in range(1, 5):
+                # try to get next status, break if no more are available:
+                try:
+                    status = durations['status'][i1+j]
+                except KeyError:
+                    break
 
-        else:
-            status = 'setting'
+                # if status is 'not observable', go to next status:
+                if status == 'not observable':
+                    continue
 
-            # linear regression for setting duration:
-            x = add_constant(x)
-            model = OLS(y, x).fit()
-            slope = model.params[1]
-            intercept = model.params[0]
-            setting_in = -intercept / slope - jd
+                # update status:
+                if status != 'unknown':
+                    durations.loc[i0:i1, 'status'] = status
+                    durations.loc[i0:i1, 'update'] = True
 
-        return status, setting_in
+                # extrapolate setting duration, if needed:
+                if status == 'setting':
+                    setting_in = durations['setting_in'][i1+j] + j - 1
+                    setting_in += np.arange(i1 - i0 + 1, 0, -1)
+                    durations.loc[i0:i1, 'setting_in'] = setting_in
+
+                break
+
+            # all next statuses are 'not observable', set to 'setting':
+            else:
+                durations.loc[i0:i1, 'status'] = 'setting'
+                durations.loc[i0:i1, 'update'] = True
+                durations.loc[i0:i1, 'setting_in'] = np.arange(i1 - i0, -1, -1)
 
     #--------------------------------------------------------------------------
     def _update_status_for_field(
@@ -1941,6 +1642,483 @@ class SurveyPlanner:
                         repeat(time_interval)))
 
         writer.join()
+
+    #--------------------------------------------------------------------------
+    def check_observability(
+            self, date_stop, date_start=None, duration_limit=60,
+            batch_write=10000, processes=1, time_interval_init=300,
+            time_interval_refine=5, days_before=7, days_after=7,
+            outlier_threshold=0.7, status_threshold=6):
+        """Calculate observing windows for all active fields and add them to
+        the database.
+
+        Parameters
+        ----------
+        date_stop : astropy.time.Time
+            The date until which observing windows should be calculated.
+        date_start : astropy.time.Time, optional
+            The date from which on observing windows should be calculated. If
+            this is later than the latest entries in the database, this will
+            lead to gaps in the observing window calculation. The user is
+            warned about this. It is safer to use this option only for the
+            initial run and not afterwards. The default is None.
+        duration_limit : float or astropy.units.quantity.Quantity, optional
+            Limit on the observing window duration above which a field is
+            considered observable. If a float is given, it is considered to be
+            in seconds. Otherwise, provide an astropy.units.quantity.Quantity
+            in any time unit, e.g. by multiplying with astropy.units.min. The
+            default is 60.
+        batch_write : int, optional
+            Observing window are temporarily saved and then written to the
+            database in batches of this size. The default is 10000.
+        processes : int, optional
+            Number of processes that run the obsering window calcuations for
+            different fields in parallel. The default is 1.
+        time_interval_init : float or Quantity, optional
+            Time accuracy at which the observing windows are initially
+            calculated. The accuracy can be refined with the next parameter.
+            If a float is given, it is considered to be in seconds. Otherwise,
+            provide an astropy.units.quantity.Quantity in any time unit, e.g.
+            by multiplying with astropy.units.min. The default is 300.
+        time_interval_refine : float or Quantity, optional
+            Time accuracy in seconds at which the observing windows are
+            calculated after the initial coarse search. If a float is given, it
+            is considered to be in seconds. Otherwise, provide an
+            astropy.units.quantity.Quantity in any time unit, e.g. by
+            multiplying with astropy.units.min.The default is 5.
+        days_before : int, optional
+            Determining the field's status requires the analysis of observation
+            windows in a time range. This arguments sets how many days before
+            are considered. The default is 7.
+        days_after : int, optional
+            Determining the field's status requires the analysis of observation
+            windows in a time range. This arguments sets how many days after
+            are considered. The default is 7.
+        outlier_threshold : float, optional
+            Threshold for outlier detection. Days with observing window
+            durations outlying from the general trend are not considered in
+            the status analysis. The default is 0.7.
+        status_threshold : float, optional
+            Threshold for distinguishing plateauing from rising or setting. If
+            the OLS p-value is larger than this threshold, the status is
+            considered "plateauing"; otherwise "rising" or "setting" depending
+            on the slope. The default is 6.
+
+        Raises
+        ------
+        ValueError
+            Raised if time_interval_init is smaller than time_interval_refine.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        - This method performs two tasks: (1) It calculates the observing
+          windows for each field for each day and saves them. (2) Then it
+          determines the observability status (not observable, rising,
+          plateauing, setting) for each field for each day.
+        - This method starts at least two additional processes: (1) one or more
+          worker processes - set by the `proccesses` parameter - that
+          calculate(s) the observing windows and (2) one process that writes
+          the observing windows to the database, similary for the second step
+          of determining and saving the status of observability.
+        """
+
+        # converte inputs:
+        batch_write = int(batch_write)
+
+        if type(duration_limit) in [float, int]:
+            duration_limit = TimeDelta(duration_limit * u.s)
+        else:
+            duration_limit = TimeDelta(duration_limit)
+
+        if type(time_interval_init) in [float, int]:
+            time_interval_init = TimeDelta(time_interval_init * u.s)
+        else:
+            time_interval_init = TimeDelta(time_interval_init)
+
+        if type(time_interval_refine) in [float, int]:
+            time_interval_refine = TimeDelta(time_interval_refine * u.s)
+        else:
+            time_interval_refine = TimeDelta(time_interval_refine)
+
+        if time_interval_refine > time_interval_init:
+            raise ValueError(
+                    "`time_interval_refine` cannot be smaller than "
+                    "`time_interval_init`.")
+
+        print('Calculate observing windows until {0}..'.format(
+                date_stop.iso[:10]))
+
+        # get telescopes from database:
+        telescope_manager = TelescopeManager(self.dbname)
+        telescopes = telescope_manager.get_telescopes(constraints=True)
+        n_tel = len(telescopes)
+        del telescope_manager
+
+        jd_stop = date_stop.jd
+        agreed_to_gaps = None
+
+        # iterate through observatories:
+        for i, telescope in enumerate(telescopes, start=1):
+            telescope_name = telescope['name']
+            print(f'\nTelescope {i} of {n_tel} selected: {telescope_name}')
+
+            # get fields that need observing window calculations:
+            print('Query fields..')
+            field_manager = FieldManager(self.dbname)
+            fields_init = field_manager.get_fields(
+                    telescope=telescope_name, init_obs_windows=True)
+            fields_tbd = field_manager.get_fields(
+                    telescope=telescope_name, needs_obs_windows=jd_stop)
+            del field_manager
+
+            with Pool(processes=processes) as pool:
+                    fields_init = pool.map(self._dict_to_field, fields_init)
+                    fields_tbd = pool.map(self._dict_to_field, fields_tbd)
+
+            # calculate observing windows for new fields:
+            agreed_to_gaps = self._add_obs_windows(
+                    fields_init, True, telescope, date_stop,
+                    date_start, duration_limit, batch_write, processes,
+                    time_interval_init, time_interval_refine, agreed_to_gaps)
+
+            # calculate observing windows for fields:
+            agreed_to_gaps = self._add_obs_windows(
+                    fields_tbd, False, telescope, date_stop,
+                    date_start, duration_limit, batch_write, processes,
+                    time_interval_init, time_interval_refine, agreed_to_gaps)
+
+        # determine observability status for each field for each day:
+        self._add_status(
+                days_before, days_after, outlier_threshold,
+                status_threshold, time_interval_refine,
+                batch_write=batch_write, processes=processes)
+
+#==============================================================================
+
+class SurveyPlanner:
+    """Pasiphae survey planner.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, dbname):
+        """Create SurveyPlanner instance.
+
+        Parameters
+        ----------
+        dbname : str
+            File name of the database.
+
+        Returns
+        -----
+        None
+        """
+
+        self.dbname = dbname
+        self.telescope = None
+        self.twilight = None
+
+    #--------------------------------------------------------------------------
+    def _tuples_to_obs_windows(self, obs_windows_tuples):
+        """Convert a tuple that contains observation window information as
+        queried from the database to an ObsWindow instance.
+
+        Parameters
+        ----------
+        obs_windows_tuples : tuple
+            Tuple as returned e.g. by db.get_obs_windows_from_to().
+
+        Returns
+        -------
+        obs_windows : ObsWindow
+            Observation window.
+        """
+
+        obs_windows = []
+
+        for obs_window_tuple in obs_windows_tuples:
+            obs_window_id, __, date_start, date_stop, __, __ = \
+                    obs_window_tuple
+            date_start = Time(date_start)
+            date_stop = Time(date_stop)
+            obs_window = ObsWindow(
+                    date_start, date_stop, obs_window_id=obs_window_id)
+            obs_windows.append(obs_window)
+
+        return obs_windows
+
+    #--------------------------------------------------------------------------
+    def _iter_fields(self, telescope=None, active=True):
+        """Connect to database and iterate through fields.
+
+        Parameters
+        ----------
+        telescope : str, optional
+            Iterate only through fields associated with this telescope name.
+            Otherwise, iterate through all fields. The default is None.
+        active : bool, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through all fields. The
+            default is True.
+
+        Yields
+        ------
+        field : Field
+            Fields as stored in the database.
+        """
+
+        # read fields from database:
+        db = DBConnectorSQLite(self.dbname)
+        fields = db.iter_fields(telescope=telescope, active=active)
+
+        for __, __, field in fields:
+            field = self._dict_to_field(field)
+
+            yield field
+
+    #--------------------------------------------------------------------------
+    def _iter_observable_fields_by_night(
+            self, telescope, night, observed=None, pending=None,
+            active=True):
+        """Iterate through fields observable during a given night, given
+        specific selection criteria.
+
+        Parameters
+        ----------
+        telescope : str
+            Telescope name.
+        night : astropy.time.Time
+            Iterate through fields observable during the night that starts on
+            the specified day. Time information is truncated.
+        observed : bool or None, optional
+            If True, iterate only through fields that have been observed at
+            least once. If False, iterate only through fields that have never
+            been observed. If None, iterate through fields irregardless of
+            whether they have  been observed or not. The default is None.
+        pending : bool or None, optional
+            If True, iterate only through fields that have pending observations
+            associated. If False, only iterate through fields that have no
+            pending observations associated. If None, iterate through fields
+            irregardless of whether they have pending observations associated
+            or not. The default is None.
+        active : bool or None, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through fields active or
+            not. The default is True.
+
+        Yields
+        ------
+        field : Field
+            Field(s) fulfilling the selected criteria.
+        """
+
+        # check that night input is date only:
+        if night.iso[11:] != '00:00:00.000':
+            print("WARNING: For argument 'night' provide date only. " \
+                  "Time information is stripped. To get fields " \
+                  "observable at specific time use 'time' argument.")
+            night = Time(night.iso[:10])
+
+        # connect to database:
+        db = DBConnectorSQLite(self.dbname)
+
+        # get telescope information:
+        telescope_name = telescope
+        telescope = db.get_telescopes(telescope)
+        utc_offset = telescope['utc_offset'] * u.h
+
+        # get local noon of current and next day in UTC:
+        noon_current = night + 12 * u.h - utc_offset
+        noon_next = night + 36 * u.h - utc_offset
+        # NOTE: ignoring daylight saving time
+
+        # iterate through fields:
+        for __, __, field in db.iter_fields(
+                telescope=telescope_name, observed=observed,
+                pending=pending, active=active):
+            field_id = field[0]
+            obs_windows = db.get_obs_windows_from_to(
+                    field_id, noon_current, noon_next)
+
+            if len(obs_windows) == 0:
+                continue
+
+            field = self._dict_to_field(field)
+            obs_windows = self._tuples_to_obs_windows(obs_windows)
+            field.add_obs_window(obs_windows)
+            date = night + 1. * u.d - utc_offset
+            self._set_field_status(
+                    field, date, days_before=3, days_after=7)
+
+            yield field
+
+    #--------------------------------------------------------------------------
+    def _iter_observable_fields_by_datetime(
+            self, telescope, datetime, observed=None, pending=None,
+            active=True):
+        """Iterate through fields observable during a given night, given
+        specific selection criteria.
+
+        Parameters
+        ----------
+        telescope : str
+            Telescope name.
+        datetime : astropy.time.Time
+            Iterate through fields that are observable at the given time.
+        observed : bool or None, optional
+            If True, iterate only through fields that have been observed at
+            least once. If False, iterate only through fields that have never
+            been observed. If None, iterate through fields irregardless of
+            whether they have  been observed or not. The default is None.
+        pending : bool or None, optional
+            If True, iterate only through fields that have pending observations
+            associated. If False, only iterate through fields that have no
+            pending observations associated. If None, iterate through fields
+            irregardless of whether they have pending observations associated
+            or not. The default is None.
+        active : bool or None, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through fields active or
+            not. The default is True.
+
+        Yields
+        ------
+        field : Field
+            Field(s) fulfilling the selected criteria.
+        """
+
+        # connect to database:
+        db = DBConnectorSQLite(self.dbname)
+        telescope_name = telescope
+
+        # iterate through fields:
+        for __, __, field in db.iter_fields(
+                telescope=telescope_name, observed=observed,
+                pending=pending, active=active):
+            field_id = field[0]
+            obs_windows = db.get_obs_windows_by_datetime(
+                    field_id, datetime)
+
+            if len(obs_windows) == 0:
+                continue
+
+            field = self._dict_to_field(field)
+            obs_windows = self._tuples_to_obs_windows(obs_windows)
+            field.add_obs_window(obs_windows)
+            self._set_field_status(
+                    field, datetime, days_before=3, days_after=7)
+
+            yield field
+
+    #--------------------------------------------------------------------------
+    def _detect_outliers(self, jd, duration, outlier_threshold=0.6):
+        """Outlier detection using Cook's distance.
+
+        Parameters
+        ----------
+        jd : array-like
+            JD.
+        duration : array-like
+            Durations of the observing windows for each JD.
+        outlier_threshold : float, optional
+            Threshold for outlier detection. Data points with a Cook's distance
+            p-value lower than this threshold are considered outliers. The
+            default is 0.6.
+
+        Returns
+        -------
+        outliers : numpy.ndarray (dtype: bool)
+            True, for detected outliers. False, otherwise.
+
+        Notes
+        -----
+        - This method is called by `_update_status_for_field()`.
+        """
+
+        x = np.asarray(jd)
+        y = np.asarray(duration)
+
+        # linear regression:
+        x = add_constant(x)
+        model = OLS(y, x).fit()
+
+        # check for outliers:
+        influence = model.get_influence()
+        __, cooks_pval = influence.cooks_distance
+        outliers = cooks_pval < outlier_threshold
+
+        return outliers
+
+    #--------------------------------------------------------------------------
+    def _get_status(
+            self, jd, jds, durations, time_interval, status_threshold=6,
+            mask_outl=None):
+        """Status based on linear ordinary least square regression with
+        exclusion of outliers.
+
+        Parameters
+        ----------
+        jd : float
+            JD of the date of interest.
+        jds : array-like
+            JDs of the observing windows.
+        durations : array-like
+            Durations of the observing windows for each JD.
+        time_interval : astropy.time.TimeDelta
+            Time accuracy at which the observing windows were calculated. The
+            status is considered "plateauing" if the standard deviation
+            of the durations is smaller than this time interval times the
+            status_threshold.
+        status_threshold : float, optional
+            Scaling factor. See description of time_interval. The default is 6.
+        mask_outl : numpy.ndarray (dtype: bool) or None, optional
+            If given, Trues mark outliers that are removed from the OLS. The
+            default is None.
+
+        Returns
+        -------
+        status : str
+            Either "rising", "plateauing", or "setting".
+        setting_in : float
+            If the status is "setting" this is the duration in days, when the
+            field is setting. Otherwise a numpy.nan is returned.
+
+        Notes
+        -----
+        - This method is called by `_update_status_for_field()`.
+        """
+
+        x = np.asarray(jds)
+        y = np.asarray(durations)
+
+        # remove outliers:
+        if mask_outl is not None:
+            x = x[~mask_outl]
+            y = y[~mask_outl]
+
+        # get status:
+        if y.std() <= time_interval.value * status_threshold:
+            status = 'plateauing'
+            setting_in = np.nan
+
+        elif np.median(np.diff(y)) > 0:
+            status = 'rising'
+            setting_in = np.nan
+
+        else:
+            status = 'setting'
+
+            # linear regression for setting duration:
+            x = add_constant(x)
+            model = OLS(y, x).fit()
+            slope = model.params[1]
+            intercept = model.params[0]
+            setting_in = -intercept / slope - jd
+
+        return status, setting_in
 
     #--------------------------------------------------------------------------
     def iter_observable_fields(
@@ -2298,160 +2476,6 @@ class SurveyPlanner:
             in_circle = fields_coord.separation(coord) <= radius
 
             yield fields_id[in_circle]
-
-    #--------------------------------------------------------------------------
-    def check_observability(
-            self, date_stop, date_start=None, duration_limit=60,
-            batch_write=10000, processes=1, time_interval_init=300,
-            time_interval_refine=5, days_before=7, days_after=7,
-            outlier_threshold=0.7, status_threshold=6):
-        """Calculate observing windows for all active fields and add them to
-        the database.
-
-        Parameters
-        ----------
-        date_stop : astropy.time.Time
-            The date until which observing windows should be calculated.
-        date_start : astropy.time.Time, optional
-            The date from which on observing windows should be calculated. If
-            this is later than the latest entries in the database, this will
-            lead to gaps in the observing window calculation. The user is
-            warned about this. It is safer to use this option only for the
-            initial run and not afterwards. The default is None.
-        duration_limit : float or astropy.units.quantity.Quantity, optional
-            Limit on the observing window duration above which a field is
-            considered observable. If a float is given, it is considered to be
-            in seconds. Otherwise, provide an astropy.units.quantity.Quantity
-            in any time unit, e.g. by multiplying with astropy.units.min. The
-            default is 60.
-        batch_write : int, optional
-            Observing window are temporarily saved and then written to the
-            database in batches of this size. The default is 10000.
-        processes : int, optional
-            Number of processes that run the obsering window calcuations for
-            different fields in parallel. The default is 1.
-        time_interval_init : float or Quantity, optional
-            Time accuracy at which the observing windows are initially
-            calculated. The accuracy can be refined with the next parameter.
-            If a float is given, it is considered to be in seconds. Otherwise,
-            provide an astropy.units.quantity.Quantity in any time unit, e.g.
-            by multiplying with astropy.units.min. The default is 300.
-        time_interval_refine : float or Quantity, optional
-            Time accuracy in seconds at which the observing windows are
-            calculated after the initial coarse search. If a float is given, it
-            is considered to be in seconds. Otherwise, provide an
-            astropy.units.quantity.Quantity in any time unit, e.g. by
-            multiplying with astropy.units.min.The default is 5.
-        days_before : int, optional
-            Determining the field's status requires the analysis of observation
-            windows in a time range. This arguments sets how many days before
-            are considered. The default is 7.
-        days_after : int, optional
-            Determining the field's status requires the analysis of observation
-            windows in a time range. This arguments sets how many days after
-            are considered. The default is 7.
-        outlier_threshold : float, optional
-            Threshold for outlier detection. Days with observing window
-            durations outlying from the general trend are not considered in
-            the status analysis. The default is 0.7.
-        status_threshold : float, optional
-            Threshold for distinguishing plateauing from rising or setting. If
-            the OLS p-value is larger than this threshold, the status is
-            considered "plateauing"; otherwise "rising" or "setting" depending
-            on the slope. The default is 6.
-
-        Raises
-        ------
-        ValueError
-            Raised if time_interval_init is smaller than time_interval_refine.
-
-        Returns
-        -------
-        None
-
-        Notes
-        -----
-        - This method performs two tasks: (1) It calculates the observing
-          windows for each field for each day and saves them. (2) Then it
-          determines the observability status (not observable, rising,
-          plateauing, setting) for each field for each day.
-        - This method starts at least two additional processes: (1) one or more
-          worker processes - set by the `proccesses` parameter - that
-          calculate(s) the observing windows and (2) one process that writes
-          the observing windows to the database, similary for the second step
-          of determining and saving the status of observability.
-        """
-
-        # converte inputs:
-        batch_write = int(batch_write)
-
-        if type(duration_limit) in [float, int]:
-            duration_limit = TimeDelta(duration_limit * u.s)
-        else:
-            duration_limit = TimeDelta(duration_limit)
-
-        if type(time_interval_init) in [float, int]:
-            time_interval_init = TimeDelta(time_interval_init * u.s)
-        else:
-            time_interval_init = TimeDelta(time_interval_init)
-
-        if type(time_interval_refine) in [float, int]:
-            time_interval_refine = TimeDelta(time_interval_refine * u.s)
-        else:
-            time_interval_refine = TimeDelta(time_interval_refine)
-
-        if time_interval_refine > time_interval_init:
-            raise ValueError(
-                    "`time_interval_refine` cannot be smaller than "
-                    "`time_interval_init`.")
-
-        print('Calculate observing windows until {0}..'.format(
-                date_stop.iso[:10]))
-
-        # get telescopes from database:
-        telescope_manager = TelescopeManager(self.dbname)
-        telescopes = telescope_manager.get_telescopes(constraints=True)
-        n_tel = len(telescopes)
-        del telescope_manager
-
-        jd_stop = date_stop.jd
-        agreed_to_gaps = None
-
-        # iterate through observatories:
-        for i, telescope in enumerate(telescopes, start=1):
-            telescope_name = telescope['name']
-            print(f'\nTelescope {i} of {n_tel} selected: {telescope_name}')
-
-            # get fields that need observing window calculations:
-            print('Query fields..')
-            field_manager = FieldManager(self.dbname)
-            fields_init = field_manager.get_fields(
-                    telescope=telescope_name, init_obs_windows=True)
-            fields_tbd = field_manager.get_fields(
-                    telescope=telescope_name, needs_obs_windows=jd_stop)
-            del field_manager
-
-            with Pool(processes=processes) as pool:
-                    fields_init = pool.map(self._dict_to_field, fields_init)
-                    fields_tbd = pool.map(self._dict_to_field, fields_tbd)
-
-            # calculate observing windows for new fields:
-            agreed_to_gaps = self._add_obs_windows(
-                    fields_init, True, telescope, date_stop,
-                    date_start, duration_limit, batch_write, processes,
-                    time_interval_init, time_interval_refine, agreed_to_gaps)
-
-            # calculate observing windows for fields:
-            agreed_to_gaps = self._add_obs_windows(
-                    fields_tbd, False, telescope, date_stop,
-                    date_start, duration_limit, batch_write, processes,
-                    time_interval_init, time_interval_refine, agreed_to_gaps)
-
-        # determine observability status for each field for each day:
-        self._add_status(
-                days_before, days_after, outlier_threshold,
-                status_threshold, time_interval_refine,
-                batch_write=batch_write, processes=processes)
 
     #--------------------------------------------------------------------------
     def count_neighbors(
