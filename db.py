@@ -1105,7 +1105,6 @@ class TelescopeManager(DBManager):
         elif not results:
             raise NotInDatabase("No constraints stored.")
 
-        # TODO............................
         # parse to dictionaries:
         parameter_sets = []
         parameter_set = {}
@@ -2699,7 +2698,51 @@ class ObservationManager(DBManager):
     def _input_observations(
             self, observation_id, field_id, exposure, repetitions, filter_name,
             observed=None, scheduled=None):
-        # TODO
+        """Parse the argument inputs for the `set_observed()` and
+        `set_scheduled()` methods.
+
+        Parameters
+        ----------
+        observation_id : int or list or None, optional
+            ID of an observation or multiple IDs of observations. If no IDs are
+            given, observations need to be identified via the next four
+            arguments. The default is None.
+        field_id : int or None, optional
+            Field ID. This and the next three arguments need to be provided to
+            identify an observation uniquely. These four arguements only work
+            in combination. Alternatively, use the `observationd_id`. The
+            default is None.
+        exposure : float or None, optional
+            Exposure time in seconds. The default is None.
+        repetitions : int or None, optional
+            Number of repetitions. The default is None.
+        filter_name : str or None, optional
+            Filter name. The default is None.
+        observed : bool or None, optional
+            Needs to be True if observations are meant to be marked as
+            observed and False if observations are meant to be marked as not
+            observed. Otherwise, None. The default is None.
+        scheduled : bool or None, optional
+            Needs to be True if observations are meant to be marked as
+            scheduled and False if observations are meant to be marked as not
+            scheduled. Otherwise, None. The default is None.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `observation_id` is neither int nor list.
+            Raised, if `observation_id` is None and at least one of `field_id`,
+            `exposure`, `repetitions`, and `filter_name` is also None.
+
+        Returns
+        -------
+        observation_ids_checked : list
+            List of observation IDs that will be set to (not)
+            observed/scheduled.
+        keep : list
+            List of IDs to update the observation dates according to the
+            observation selection made here.
+        """
 
         if observed is True:
             not_observed = False
@@ -2828,7 +2871,24 @@ class ObservationManager(DBManager):
 
     #--------------------------------------------------------------------------
     def _parse_date(self, date):
-        # TODO
+        """
+
+        Parameters
+        ----------
+        date : str or list
+            Date and time of an observation in the format
+            "YYYY-MM-DD hh:mm:ss.s".
+
+        Raises
+        ------
+        ValueError
+            Raised, if the string format cannot be parsed as astropy.time.Time.
+
+        Returns
+        -------
+        date_str : str
+            Date and time as str.
+        """
 
         try:
             date_str = Time(date).iso
@@ -2842,7 +2902,30 @@ class ObservationManager(DBManager):
 
     #--------------------------------------------------------------------------
     def _input_date(self, date, n, keep):
-        # TODO
+        """Parse the date argument input for the `set_observed()` method.
+
+        Parameters
+        ----------
+        date : str or list
+            Date and time of an observation in the format
+            "YYYY-MM-DD hh:mm:ss.s".
+        n : int
+            Number of corresponding observations.
+        keep : list
+            IDs of items that should be keep, as returned from
+            `_input_observations()`. All items with no corresponding ID in this
+            list will be removed.
+
+        Raises
+        ------
+        ValueError
+            Raised, if date is neither str nor list.
+
+        Returns
+        -------
+        date_str : list
+            List of date strings.
+        """
 
         # multiple dates provided as list:
         if type(date) in [list, tuple]:
@@ -2882,7 +2965,58 @@ class ObservationManager(DBManager):
     def set_observed(
             self, observation_id=None, field_id=None, exposure=None,
             repetitions=None, filter_name=None, date=None, observed=True):
-        # TODO
+        """Mark observations as (not) observed.
+
+        Parameters
+        ----------
+        observation_id : int or list or None, optional
+            ID of an observation or multiple IDs of observations. If no IDs are
+            given, observations need to be identified via the next four
+            arguments. The default is None.
+        field_id : int or None, optional
+            Field ID. This and the next three arguments need to be provided to
+            identify an observation uniquely. These four arguements only work
+            in combination. Alternatively, use the `observationd_id`. The
+            default is None.
+        exposure : float or None, optional
+            Exposure time in seconds. The default is None.
+        repetitions : int or None, optional
+            Number of repetitions. The default is None.
+        filter_name : str or None, optional
+            Filter name. The default is None.
+        date : str or list or None, optional
+            Date and time of the observation to be stored in the database.
+            Date format: "YYYY-MM-DD hh:mm:ss.s". If only one date and time is
+            given as str, it will be stored for all specified observations.
+            Different dates and times can be provided as a list of the same
+            length as observation IDs. If no date is given, the user may chose
+            to use the current time. The date is only relevant when marking
+            observations as observed.
+        observed : bool, optional
+            If True, mark the specified observation as observed. If False,
+            mark the specified observation as not observed. In this case the
+            stored observation date is automatically deleted. The latter works
+            only with specifying an observation ID. It does not work with the
+            other arguments. The default is True.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `scheduled` is False and no observation ID is specified.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        * Multiple observations can be marked only via the `observation_id`
+          argument.
+        * The method does not check whether the specified observations are
+          already marked as (not) observed in the database.
+        * Observations marked as observed are automatically marked as not
+          scheduled.
+        """
 
         # check input:
         if (type(observation_id) in [list, tuple]) \
@@ -2946,7 +3080,47 @@ class ObservationManager(DBManager):
     def set_scheduled(
             self, observation_id=None, field_id=None, exposure=None,
             repetitions=None, filter_name=None, scheduled=True):
-        # TODO
+        """Mark observations as (not) scheduled.
+
+        Parameters
+        ----------
+        observation_id : int or list or None, optional
+            ID of an observation or multiple IDs of observations. If no IDs are
+            given, observations need to be identified via the next four
+            arguments. The default is None.
+        field_id : int or None, optional
+            Field ID. This and the next three arguments need to be provided to
+            identify an observation uniquely. These four arguements only work
+            in combination. Alternatively, use the `observationd_id`. The
+            default is None.
+        exposure : float or None, optional
+            Exposure time in seconds. The default is None.
+        repetitions : int or None, optional
+            Number of repetitions. The default is None.
+        filter_name : str or None, optional
+            Filter name. The default is None.
+        scheduled : bool, optional
+            If True, mark the specified observation as scheduled. If False,
+            mark the specified observation as not scheduled. The latter works
+            only with specifying an observation ID. It does not work with the
+            other arguments. The default is True.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `scheduled` is False and no observation ID is specified.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        * Multiple observations can be marked only via the `observation_id`
+          argument.
+        * The method does not check whether the specified observations are
+          already marked as (not) scheduled in the database.
+        """
 
         if not scheduled and observation_id is None:
             raise ValueError(
@@ -2980,7 +3154,12 @@ class ObservationManager(DBManager):
 
     #--------------------------------------------------------------------------
     def info(self):
-        # TODO
+        """Print infos about observations.
+
+        Returns
+        -------
+        None
+        """
 
         observations = self.get_observations(active=None)
         observations = DataFrame(observations)
@@ -2998,7 +3177,7 @@ class ObservationManager(DBManager):
         print(f'Inactive:  {n_inactive:24d}')
         print(f'Finished*: {n_done:24d}')
         print(f'Pending*:  {n_pending:24d}')
-        print(f'* of those that are active.')
+        print('* of those that are active.')
         print('-----------------------------------\n')
 
 #==============================================================================
