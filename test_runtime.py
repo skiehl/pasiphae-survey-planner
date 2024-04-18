@@ -6,17 +6,17 @@ import astropy.units as u
 from itertools import product
 import os
 import platform
-from ObservabilityPlanner import ObservabilityPlanner
+from surveyplanner import ObservabilityPlanner
 
 #==============================================================================
 # CONFIG
 #==============================================================================
 
-n_tests = 3
-processes = (1, 2, 5, 15, )
-batch_write = (20000, )
-time_interval_init = (600, ) # sec
-time_interval_refine = (60, ) # sec
+n_tests = 1
+processes = 5
+batch_write = (100, 200, 500, 1000, 2000)
+time_interval_init = 600 # sec
+time_interval_refine = 60 # sec
 
 date_stop = Time('2024-01-02')
 date_start = Time('2024-01-01')
@@ -29,7 +29,7 @@ reset_db = True
 db_init = 'test_strategy_init.sqlite3 '
 db_name = 'test_runtime.sqlite3'
 
-save_runtime = 'runtime_tests_5_fullgrid_kallisto_b.dat'
+save_runtime = 'runtime_tests_5_fullgrid_kallisto_add.dat'
 #save_runtime = False
 
 #==============================================================================
@@ -87,7 +87,7 @@ if __name__ == '__main__':
                     date_stop, date_start=date_start, duration_limit=5*u.min,
                     processes=processes, batch_write=batch_write,
                     time_interval_init=time_interval_init,
-                    time_interval_refine=time_interval_refine)
+                    time_interval_refine=time_interval_refine, all_fields=True)
             timeit_total = Time.now() - timeit_start
             print('Runtime:', timeit_total.value * 24, 'hours')
 

@@ -201,6 +201,164 @@ class DBManager:
 
         return last_insert_id
 
+    #--------------------------------------------------------------------------
+    def dbstatus(self, verbose=1):
+        """Return count various data entries in the database.
+
+        Parameters
+        ----------
+        verbose : int, optional
+            If 0, no info is printed. Otherwise, print out the results. The
+            default is 1.
+
+        Returns
+        -------
+        results : dict
+            Number of telescopes, constraints, fields, observations, and
+            guidestars stored in the database.
+        """
+
+        # query stats:
+        with SQLiteConnection(self.db_file) as connection:
+
+            # get number of telescopes:
+            query = """\
+                SELECT count(telescope_id) AS n
+                FROM Telescopes
+                """
+            result = self._query(connection, query).fetchone()
+            n_telescopes = result['n']
+
+            # get number of constraints associated with each telescope:
+            query = """\
+                SELECT IFNULL(n, 0) AS n
+                FROM Telescopes AS t
+                LEFT JOIN (
+                	SELECT ps.telescope_id, COUNT(DISTINCT p.constraint_id) AS n
+                	FROM Parameters AS p
+                	LEFT JOIN ParameterSets AS ps
+                	ON p.parameter_set_id = ps.parameter_set_id
+                	WHERE ps.active = 1
+                	GROUP BY ps.telescope_id
+                ) AS p
+                ON t.telescope_id = p.telescope_id
+                """
+            results = self._query(connection, query).fetchall()
+            n_constraints = [item['n'] for item in results]
+
+            # get number of fields associated with each telescope:
+            query = """\
+                SELECT IFNULL(f.n, 0) AS n
+                FROM Telescopes AS t
+                LEFT JOIN (
+                	SELECT telescope_id, COUNT(field_id) AS n
+                	FROM Fields
+                	GROUP BY telescope_id
+                	) AS f
+                ON t.telescope_id = f.telescope_id
+                """
+            results = self._query(connection, query).fetchall()
+            n_fields = [item['n'] for item in results]
+
+            # get number of active observations:
+            query = """\
+                SELECT COUNT(observation_id) AS n
+                FROM Observations
+                WHERE active = 1
+                """
+            result = self._query(connection, query).fetchone()
+            n_obs_tot = result['n']
+
+            # get number of active, pending observations:
+            query = """\
+                SELECT COUNT(observation_id) AS n
+                FROM Observations
+                WHERE (active = 1 AND done = 0)
+                """
+            result = self._query(connection, query).fetchone()
+            n_obs_pending = result['n']
+
+            # get number of fields without active observations:
+            query = """\
+                SELECT COUNT(f.field_id) AS n
+                FROM Fields AS f
+                LEFT JOIN  (
+                	SELECT *
+                	FROM Observations
+                	WHERE active = 1) AS o
+                ON f.field_id = o.field_id
+                WHERE (f.active = 1 AND o.active IS NULL)
+                """
+            result = self._query(connection, query).fetchone()
+            n_fields_wo_obs = result['n']
+
+            # get number of active guidestars:
+            query = """\
+                SELECT COUNT(guidestar_id) AS n
+                FROM Guidestars
+                WHERE active = 1
+                """
+            result = self._query(connection, query).fetchone()
+            n_guidestars = result['n']
+
+            # get number of fields without active guidestars:
+            query = """\
+                SELECT COUNT(f.field_id) AS n
+                FROM Fields AS f
+                LEFT JOIN  (
+                	SELECT *
+                	FROM Guidestars
+                	WHERE active = 1) AS g
+                ON f.field_id = g.field_id
+                WHERE (f.active = 1 AND g.active IS NULL)
+                """
+            result = self._query(connection, query).fetchone()
+            n_fields_wo_guidestars = result['n']
+
+        # print out results:
+        if verbose:
+            info_constraints = '\n'.join([
+                    'Constraints telescope {0}: {1:10d}'.format(i, n) \
+                    for i, n in enumerate(n_constraints, start=1)])
+            info_fields = '\n'.join([
+                    'Fields telescope {0}: {1:15d}'.format(i, n) \
+                    for i, n in enumerate(n_fields, start=1)])
+
+
+            info = dedent("""\
+                ======= STORED IN DATABASE ========
+                Telescopes:              {0:10d}
+                {1}
+                -----------------------------------
+                Fields total:            {2:10d}
+                {3}
+                -----------------------------------
+                Observations:            {4:10d}
+                Pending observations:    {5:10d}
+                Fields w/o observations: {6:10d}
+                -----------------------------------
+                Guidestars:              {7:10d}
+                Fields w/o guidestars:   {8:10d}
+                -----------------------------------
+                """).format(
+                        n_telescopes, info_constraints, sum(n_fields),
+                        info_fields, n_obs_tot, n_obs_pending,
+                        n_fields_wo_obs, n_guidestars, n_fields_wo_guidestars)
+            print(info)
+
+        # return results:
+        results = {
+            'telescopes': n_telescopes,
+            'constraints per telescope': n_constraints,
+            'fields per telescope': n_fields,
+            'observations': n_obs_tot,
+            'pending observations': n_obs_pending,
+            'fields without observations': n_fields_wo_obs,
+            'guidestarts': n_guidestars,
+            'fields without guidestars': n_fields_wo_guidestars}
+
+        return results
+
 #==============================================================================
 
 class TelescopeManager(DBManager):
@@ -1282,7 +1440,8 @@ class FieldManager(DBManager):
     #--------------------------------------------------------------------------
     def get_fields(
             self, telescope=None, observed=None, pending=None, active=True,
-            needs_obs_windows=None, init_obs_windows=False):
+            include_timerange=False, needs_obs_windows=None,
+            init_obs_windows=False):
         """Get fields from the database, given various selection criteria.
 
         Parameters
@@ -1305,6 +1464,11 @@ class FieldManager(DBManager):
             If True, only query active fields. If False, only query inactive
             fields. If None, query fields independent of whether they are
             active or not. The default is True.
+        include_timerange : bool or str, optional
+            If True, time range of the latest observing window calculations is
+            included. If 'all', all time ranges associated with the active
+            parameter set are included. If False, no time ranges are included.
+            The default is False.
         needs_obs_window : float, optional
             If JD is given, only fields are returned that need additional
             observing window calculations up to this JD. The default is None.
@@ -1317,6 +1481,7 @@ class FieldManager(DBManager):
         ValueError
             Raised, if `needs_obs_window` is set and `init_obs_windows=True`.
             Only one option can be selected at a time.
+            Raise, if `include_timerange` is neither Boolean nor 'all'.
 
         Returns
         -------
@@ -1329,6 +1494,15 @@ class FieldManager(DBManager):
             raise ValueError(
                     'Either set `needs_obs_window` OR use '\
                     '`init_obs_windows=True`.')
+
+        if not (isinstance(include_timerange, bool) \
+                or include_timerange == 'all'):
+            raise ValueError(
+                '`include_timerange` must be True, False, or "all".')
+
+        if include_timerange == 'all':
+            raise NotImplementedError()
+            # TODO
 
         # set query condition for observed or not:
         if observed is None:
@@ -1361,19 +1535,28 @@ class FieldManager(DBManager):
         else:
             condition_obswindow = ""
 
+        # set query elements for active time ranges:
+        if include_timerange is True:
+            query_timerange_sel = "r.jd_first, r.jd_next,"
+            query_timerange = """\
+                LEFT JOIN (
+            	SELECT field_id, jd_first, jd_next
+            	FROM TimeRanges
+            	WHERE active = 1) AS r
+                ON f.field_id = r.field_id
+                """
+        else:
+            query_timerange_sel = ""
+            query_timerange = ""
+
         # query data base:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
                 SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
-                    f.tilt, t.name AS telescope, f.active, r.jd_first,
-                    r.jd_next, p.nobs_tot, p.nobs_done,
-                    p.nobs_tot - p.nobs_done AS nobs_pending
+                    f.tilt, t.name AS telescope, f.active, {0} p.nobs_tot,
+                    p.nobs_done, p.nobs_tot - p.nobs_done AS nobs_pending
                 FROM Fields AS f
-                LEFT JOIN (
-                	SELECT field_id, jd_first, jd_next
-                	FROM TimeRanges
-                	WHERE active = 1) AS r
-                ON f.field_id = r.field_id
+                {1}
                 LEFT JOIN Telescopes AS t
                     ON f.telescope_id = t.telescope_id
                 LEFT JOIN (
@@ -1383,8 +1566,9 @@ class FieldManager(DBManager):
                 	GROUP BY field_id
                 	) AS p
                 ON f.field_id = p.field_id
-                WHERE (active = {0} {1} {2} {3} {4});
+                WHERE (active = {2} {3} {4} {5} {6});
                 """.format(
+                        query_timerange_sel, query_timerange,
                         active, condition_telescope, condition_observed,
                         condition_pending, condition_obswindow)
             results = self._query(connection, query).fetchall()
@@ -1499,10 +1683,10 @@ class FieldManager(DBManager):
         print(f'Total number of fields: {n_fields:11d}')
 
         if n_fields:
-            n_pending_fields = np.sum(fields.iloc[:,11] > 0)
-            n_pending_obs = np.sum(fields.iloc[:,11])
-            n_finished_fields = np.sum(fields.iloc[:,11] == 0)
-            n_finished_obs = np.sum(fields.iloc[:,10])
+            n_pending_fields = np.sum(fields.iloc[:,9] > 0)
+            n_pending_obs = np.sum(fields.iloc[:,9])
+            n_finished_fields = np.sum(fields.iloc[:,9] == 0)
+            n_finished_obs = np.sum(fields.iloc[:,8])
 
             print(f'Pending fields:         {n_pending_fields:11d}')
             print(f'Pending observations:   {n_pending_obs:11d}')

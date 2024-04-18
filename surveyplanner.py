@@ -9,7 +9,6 @@ from itertools import repeat
 from multiprocessing import Manager, Pool, Process
 import numpy as np
 from pandas import DataFrame
-from statsmodels.api import add_constant, OLS
 from time import sleep
 from textwrap import dedent
 
@@ -594,6 +593,64 @@ class ObservabilityPlanner:
         self.twilight = None
 
     #--------------------------------------------------------------------------
+    def _check_db(self, all_fields):
+        """Check if database is properly set up for observability calculations.
+
+        Parameters
+        ----------
+        all_fields : bool
+            If True, only warn about missing observations, but do not stop
+            calculation of observabilities. Otherwise, stop calculation, if no
+            observations are stored in the database.
+
+        Returns
+        -------
+        ready : bool
+            True, if the database is set up for the observability calculations.
+            False, otherwise.
+        """
+
+        ready = True
+        manager = ObservabilityManager(self.dbname)
+        counts = manager.dbstatus(verbose=0)
+
+        # check that telescopes exist:
+        if not counts['telescopes']:
+            print('\nWARNING: No telescopes stored in the database!')
+            ready = False
+
+        # check that constraints exist for each telescope:
+        if np.any(np.array(counts['constraints per telescope']) == 0):
+            print('\nWARNING: No constrains stored for some telescopes!')
+            ready = False
+
+        # check that fields exist:
+        if not sum(counts['fields per telescope']):
+            print('\nWARNING: No fields stored in database!')
+            ready = False
+
+        # warn if no fields exist for some telescope(s):
+        if np.any(np.array(counts['fields per telescope']) == 0):
+            print('\nWARNING: No fields stored for some telescopes!')
+            # only warn
+
+        # check that observations exist:
+        if not counts['observations']:
+            print('\nWARNING: No observations stored in database!')
+
+            if all_fields:
+                print('Calculate observabilities for all fields anyway.')
+            else:
+                ready = False
+
+        if not ready:
+            print('Use `DBCreator()` class from db.py to set up the ' \
+                  'database.\nObservabilities cannot be calculated. Aborted!\n'
+                  )
+
+        return ready
+
+    #--------------------------------------------------------------------------
     def _dict_to_field(self, field_dict):
         """Convert a dict that contains field information as queried from the
         database to a Field instance.
@@ -975,13 +1032,15 @@ class ObservabilityPlanner:
             if n_done >= n_tbd:
                 done = True
 
-            print(f'\rProgress: field {n_done} of {n_tbd} ' \
-                  f'({n_done/n_tbd*100:.1f}%)..           ', end='')
+            print(f'\rCalculations: {n_done}/{n_tbd} ' \
+                  f'({n_done/n_tbd*100:.1f}%). Queued: {n_queued}. '\
+                  'Processing..                                      ', end='')
 
             # extract batch of results from queue:
             if done or n_queued >= batch_write:
-                print('\rProgress: reading from queue..                      ',
-                      end='')
+                print(f'\rCalculations: {n_done}/{n_tbd} ' \
+                      f'({n_done/n_tbd*100:.1f}%). Queued: {n_queued}. ' \
+                      'Reading from queue..                          ', end='')
                 batch_field_ids, batch_status, \
                 batch_obs_windows_field_ids, batch_obs_windows_obs_ids, \
                 batch_obs_windows_start, batch_obs_windows_stop, \
@@ -995,8 +1054,9 @@ class ObservabilityPlanner:
 
             # write results to database:
             if write:
-                print(f'\rProgress: writing {n_queried} entries to database..',
-                      end='')
+                print(f'\rCalculations: {n_done}/{n_tbd} ' \
+                      f'({n_done/n_tbd*100:.1f}%). Queued: {n_queued}. ' \
+                      f'Writing {n_queried} entries to database..', end='')
 
                 # add observabilities to database:
                 batch_dates = [jd]*len(batch_field_ids)
@@ -1018,7 +1078,8 @@ class ObservabilityPlanner:
 
                 n_done += n_queried
 
-        print('\rProgress: done                                              ')
+        print('\rProgress: done                                             ' \
+              '                        ')
 
     #--------------------------------------------------------------------------
     def _find_obs_window_for_field(
@@ -1646,9 +1707,9 @@ class ObservabilityPlanner:
     #--------------------------------------------------------------------------
     def check_observability(
             self, date_stop, date_start=None, duration_limit=60,
-            batch_write=10000, processes=1, time_interval_init=300,
-            time_interval_refine=5, days_before=7, days_after=7,
-            outlier_threshold=0.7, status_threshold=6):
+            batch_write=10000, processes=1, time_interval_init=600,
+            time_interval_refine=60, days_before=7, days_after=7,
+            outlier_threshold=0.7, status_threshold=6, all_fields=False):
         """Calculate observing windows for all active fields and add them to
         the database.
 
@@ -1703,6 +1764,11 @@ class ObservabilityPlanner:
             the OLS p-value is larger than this threshold, the status is
             considered "plateauing"; otherwise "rising" or "setting" depending
             on the slope. The default is 6.
+        all_fields : bool, optional
+            If False, observabilities are calculated only for fields with
+            pending observations. If True, observabilities are calculated for
+            all fields regardless of whether they have pending observations
+            associated or not. The default is False.
 
         Raises
         ------
@@ -1725,6 +1791,10 @@ class ObservabilityPlanner:
           the observing windows to the database, similary for the second step
           of determining and saving the status of observability.
         """
+
+        # check that database is properly set up for calculations:
+        if not self._check_db(all_fields):
+            return None
 
         # converte inputs:
         batch_write = int(batch_write)
@@ -1761,6 +1831,11 @@ class ObservabilityPlanner:
         jd_stop = date_stop.jd
         agreed_to_gaps = None
 
+        if all_fields:
+            pending = None
+        else:
+            pending = True
+
         # iterate through observatories:
         for i, telescope in enumerate(telescopes, start=1):
             telescope_name = telescope['name']
@@ -1770,9 +1845,11 @@ class ObservabilityPlanner:
             print('Query fields..')
             field_manager = FieldManager(self.dbname)
             fields_init = field_manager.get_fields(
-                    telescope=telescope_name, init_obs_windows=True)
+                    telescope=telescope_name, pending=pending,
+                    include_timerange=True, init_obs_windows=True)
             fields_tbd = field_manager.get_fields(
-                    telescope=telescope_name, needs_obs_windows=jd_stop)
+                    telescope=telescope_name, pending=pending,
+                    include_timerange=True, needs_obs_windows=jd_stop)
             del field_manager
 
             with Pool(processes=processes) as pool:
@@ -1818,81 +1895,21 @@ class SurveyPlanner:
         """
 
         self.dbname = dbname
-        self.telescope = None
-        self.twilight = None
 
     #--------------------------------------------------------------------------
-    def _tuples_to_obs_windows(self, obs_windows_tuples):
-        """Convert a tuple that contains observation window information as
-        queried from the database to an ObsWindow instance.
-
-        Parameters
-        ----------
-        obs_windows_tuples : tuple
-            Tuple as returned e.g. by db.get_obs_windows_from_to().
-
-        Returns
-        -------
-        obs_windows : ObsWindow
-            Observation window.
-        """
-
-        obs_windows = []
-
-        for obs_window_tuple in obs_windows_tuples:
-            obs_window_id, __, date_start, date_stop, __, __ = \
-                    obs_window_tuple
-            date_start = Time(date_start)
-            date_stop = Time(date_stop)
-            obs_window = ObsWindow(
-                    date_start, date_stop, obs_window_id=obs_window_id)
-            obs_windows.append(obs_window)
-
-        return obs_windows
-
-    #--------------------------------------------------------------------------
-    def _iter_fields(self, telescope=None, active=True):
-        """Connect to database and iterate through fields.
-
-        Parameters
-        ----------
-        telescope : str, optional
-            Iterate only through fields associated with this telescope name.
-            Otherwise, iterate through all fields. The default is None.
-        active : bool, optional
-            If True, only iterate through active fields. If False, only iterate
-            through inactive fields. If None, iterate through all fields. The
-            default is True.
-
-        Yields
-        ------
-        field : Field
-            Fields as stored in the database.
-        """
-
-        # read fields from database:
-        db = DBConnectorSQLite(self.dbname)
-        fields = db.iter_fields(telescope=telescope, active=active)
-
-        for __, __, field in fields:
-            field = self._dict_to_field(field)
-
-            yield field
-
-    #--------------------------------------------------------------------------
-    def _iter_observable_fields_by_night(
-            self, telescope, night, observed=None, pending=None,
+    def _get_observable_fields_by_night(
+            self, date, telescope, observed=None, pending=None,
             active=True):
-        """Iterate through fields observable during a given night, given
-        specific selection criteria.
+        """Get fields observable during a given night, given specific selection
+        criteria.
 
         Parameters
         ----------
+        date : astropy.time.Time
+            Date of the night start. Time information is truncated.
         telescope : str
-            Telescope name.
-        night : astropy.time.Time
-            Iterate through fields observable during the night that starts on
-            the specified day. Time information is truncated.
+            If specified, only fields associated with this telescope are
+            returned. The default is None.
         observed : bool or None, optional
             If True, iterate only through fields that have been observed at
             least once. If False, iterate only through fields that have never
@@ -1909,31 +1926,45 @@ class SurveyPlanner:
             through inactive fields. If None, iterate through fields active or
             not. The default is True.
 
-        Yields
+        Raises
         ------
-        field : Field
-            Field(s) fulfilling the selected criteria.
+        ValueError
+            Raised, if `telscope` is neither string nor None.
+
+        Returns
+        ------
+        fields : list of dict
+            Each list item is a dict with the field parameters.
         """
 
-        # check that night input is date only:
-        if night.iso[11:] != '00:00:00.000':
-            print("WARNING: For argument 'night' provide date only. " \
-                  "Time information is stripped. To get fields " \
-                  "observable at specific time use 'time' argument.")
-            night = Time(night.iso[:10])
+        # database connections:
+        telescope_manager= TelescopeManager(self.dbname)
+        field_manager = FieldManager(self.dbname)
 
-        # connect to database:
-        db = DBConnectorSQLite(self.dbname)
+        # check input:
+        if isinstance(telescope, str):
+            telescopes = [telescope]
+        elif telescope is None:
+            telescopes = telescope_manager.get_telescope_names()
+        else:
+            raise ValueError('`telescope` must be string or None.')
 
-        # get telescope information:
-        telescope_name = telescope
-        telescope = db.get_telescopes(telescope)
-        utc_offset = telescope['utc_offset'] * u.h
+        # truncate time information from date:
+        date = Time(date.iso[:10])
 
-        # get local noon of current and next day in UTC:
-        noon_current = night + 12 * u.h - utc_offset
-        noon_next = night + 36 * u.h - utc_offset
-        # NOTE: ignoring daylight saving time
+        # iterate through telescopes:
+        for telescope_name in telescopes:
+            # get local noon of current and next day in UTC:
+            telescope = telescope_manager.get_telescopes(telescope_name)
+            utc_offset = telescope['utc_offset'] * u.h
+            noon_current = date + 12 * u.h - utc_offset
+            noon_next = date + 36 * u.h - utc_offset
+            # NOTE: ignoring daylight saving time
+
+
+
+
+
 
         # iterate through fields:
         for __, __, field in db.iter_fields(
@@ -1956,602 +1987,122 @@ class SurveyPlanner:
             yield field
 
     #--------------------------------------------------------------------------
-    def _iter_observable_fields_by_datetime(
-            self, telescope, datetime, observed=None, pending=None,
-            active=True):
-        """Iterate through fields observable during a given night, given
-        specific selection criteria.
-
-        Parameters
-        ----------
-        telescope : str
-            Telescope name.
-        datetime : astropy.time.Time
-            Iterate through fields that are observable at the given time.
-        observed : bool or None, optional
-            If True, iterate only through fields that have been observed at
-            least once. If False, iterate only through fields that have never
-            been observed. If None, iterate through fields irregardless of
-            whether they have  been observed or not. The default is None.
-        pending : bool or None, optional
-            If True, iterate only through fields that have pending observations
-            associated. If False, only iterate through fields that have no
-            pending observations associated. If None, iterate through fields
-            irregardless of whether they have pending observations associated
-            or not. The default is None.
-        active : bool or None, optional
-            If True, only iterate through active fields. If False, only iterate
-            through inactive fields. If None, iterate through fields active or
-            not. The default is True.
-
-        Yields
-        ------
-        field : Field
-            Field(s) fulfilling the selected criteria.
-        """
-
-        # connect to database:
-        db = DBConnectorSQLite(self.dbname)
-        telescope_name = telescope
-
-        # iterate through fields:
-        for __, __, field in db.iter_fields(
-                telescope=telescope_name, observed=observed,
-                pending=pending, active=active):
-            field_id = field[0]
-            obs_windows = db.get_obs_windows_by_datetime(
-                    field_id, datetime)
-
-            if len(obs_windows) == 0:
-                continue
-
-            field = self._dict_to_field(field)
-            obs_windows = self._tuples_to_obs_windows(obs_windows)
-            field.add_obs_window(obs_windows)
-            self._set_field_status(
-                    field, datetime, days_before=3, days_after=7)
-
-            yield field
+    def _get_observable_fields_by_datetime(self):
+        # TODO
+        raise NotImplementedError()
 
     #--------------------------------------------------------------------------
-    def _detect_outliers(self, jd, duration, outlier_threshold=0.6):
-        """Outlier detection using Cook's distance.
-
-        Parameters
-        ----------
-        jd : array-like
-            JD.
-        duration : array-like
-            Durations of the observing windows for each JD.
-        outlier_threshold : float, optional
-            Threshold for outlier detection. Data points with a Cook's distance
-            p-value lower than this threshold are considered outliers. The
-            default is 0.6.
-
-        Returns
-        -------
-        outliers : numpy.ndarray (dtype: bool)
-            True, for detected outliers. False, otherwise.
-
-        Notes
-        -----
-        - This method is called by `_update_status_for_field()`.
-        """
-
-        x = np.asarray(jd)
-        y = np.asarray(duration)
-
-        # linear regression:
-        x = add_constant(x)
-        model = OLS(y, x).fit()
-
-        # check for outliers:
-        influence = model.get_influence()
-        __, cooks_pval = influence.cooks_distance
-        outliers = cooks_pval < outlier_threshold
-
-        return outliers
-
-    #--------------------------------------------------------------------------
-    def _get_status(
-            self, jd, jds, durations, time_interval, status_threshold=6,
-            mask_outl=None):
-        """Status based on linear ordinary least square regression with
-        exclusion of outliers.
-
-        Parameters
-        ----------
-        jd : float
-            JD of the date of interest.
-        jds : array-like
-            JDs of the observing windows.
-        durations : array-like
-            Durations of the observing windows for each JD.
-        time_interval : astropy.time.TimeDelta
-            Time accuracy at which the observing windows were calculated. The
-            status is considered "plateauing" if the standard deviation
-            of the durations is smaller than this time interval times the
-            status_threshold.
-        status_threshold : float, optional
-            Scaling factor. See description of time_interval. The default is 6.
-        mask_outl : numpy.ndarray (dtype: bool) or None, optional
-            If given, Trues mark outliers that are removed from the OLS. The
-            default is None.
-
-        Returns
-        -------
-        status : str
-            Either "rising", "plateauing", or "setting".
-        setting_in : float
-            If the status is "setting" this is the duration in days, when the
-            field is setting. Otherwise a numpy.nan is returned.
-
-        Notes
-        -----
-        - This method is called by `_update_status_for_field()`.
-        """
-
-        x = np.asarray(jds)
-        y = np.asarray(durations)
-
-        # remove outliers:
-        if mask_outl is not None:
-            x = x[~mask_outl]
-            y = y[~mask_outl]
-
-        # get status:
-        if y.std() <= time_interval.value * status_threshold:
-            status = 'plateauing'
-            setting_in = np.nan
-
-        elif np.median(np.diff(y)) > 0:
-            status = 'rising'
-            setting_in = np.nan
-
-        else:
-            status = 'setting'
-
-            # linear regression for setting duration:
-            x = add_constant(x)
-            model = OLS(y, x).fit()
-            slope = model.params[1]
-            intercept = model.params[0]
-            setting_in = -intercept / slope - jd
-
-        return status, setting_in
-
-    #--------------------------------------------------------------------------
-    def iter_observable_fields(
-            self, telescope, night=None, datetime=None, observed=None,
-            pending=None, active=True):
-        """Iterate through fields observable during a given night or at a
-        specific time, given specific selection criteria.
-
-        Parameters
-        ----------
-        telescope : str
-            Telescope name.
-        night : astropy.time.Time, optional
-            Iterate through fields observable during the night that starts on
-            the specified day. Time information is truncated. Either set this
-            argument or 'datetime'. If this argument is set, 'datetime' is not
-            used.
-        datetime : astropy.time.Time, optional
-            Iterate through fields that are observable at the given time.
-            Either set this argument or 'night'.
-        observed : bool or None, optional
-            If True, iterate only through fields that have been observed at
-            least once. If False, iterate only through fields that have never
-            been observed. If None, iterate through fields irregardless of
-            whether they have  been observed or not. The default is None.
-        pending : bool or None, optional
-            If True, iterate only through fields that have pending observations
-            associated. If False, only iterate through fields that have no
-            pending observations associated. If None, iterate through fields
-            irregardless of whether they have pending observations associated
-            or not. The default is None.
-        active : bool or None, optional
-            If True, only iterate through active fields. If False, only iterate
-            through inactive fields. If None, iterate through fields active or
-            not. The default is True.
-
-        Yields
-        ------
-        field : Field
-            Field(s) fulfilling the selected criteria.
-        """
-
-        # check input:
-        if night is not None:
-            return self._iter_observable_fields_by_night(
-                    telescope, night, observed=observed, pending=pending,
-                    active=active)
-
-        elif datetime is not None:
-            return self._iter_observable_fields_by_datetime(
-                    telescope, datetime, observed=observed, pending=pending,
-                    active=active)
-
-        else:
-            raise ValueError(
-                    "Either provide 'night' or 'datetime' argument.")
-
-    #--------------------------------------------------------------------------
-    def get_observable_fields(
-            self, telescope, night=None, datetime=None, observed=None,
-            pending=None, active=True):
-        """Get a list of fields observable during a given night or at a
-        specific time, given specific selection criteria.
-
-        Parameters
-        ----------
-        telescope : str
-            Telescope name.
-        night : astropy.time.Time, optional
-            Iterate through fields observable during the night that starts on
-            the specified day. Time information is truncated. Either set this
-            argument or 'datetime'. If this argument is set, 'datetime' is not
-            used.
-        datetime : astropy.time.Time, optional
-            Iterate through fields that are observable at the given time.
-            Either set this argument or 'night'.
-        observed : bool or None, optional
-            If True, iterate only through fields that have been observed at
-            least once. If False, iterate only through fields that have never
-            been observed. If None, iterate through fields irregardless of
-            whether they have  been observed or not. The default is None.
-        pending : bool or None, optional
-            If True, iterate only through fields that have pending observations
-            associated. If False, only iterate through fields that have no
-            pending observations associated. If None, iterate through fields
-            irregardless of whether they have pending observations associated
-            or not. The default is None.
-        active : bool or None, optional
-            If True, only iterate through active fields. If False, only iterate
-            through inactive fields. If None, iterate through fields active or
-            not. The default is True.
-
-        Returns
-        ------
-        observable_fields : list of Field
-            Field(s) fulfilling the selected criteria.
-        """
-
-        observable_fields = [field for field in self.iter_observable_fields(
-                telescope, night=night, datetime=datetime, observed=observed,
-                pending=pending, active=active)]
-
-        return observable_fields
-
-    #--------------------------------------------------------------------------
-    def get_night_start_end(self, telescope, datetime):
-        """Get the start and stop time of a night for a given date.
-
-        Parameters
-        ----------
-        telescope : str
-            Telescope name as stored in the database.
-        datetime : astropy.time.Time
-            The night starting on that date is considered. Time information is
-            truncated.
-
-        Returns
-        -------
-        night_start : astropy.time.Time
-            Start date and time of the night.
-        night_stop : astropy.time.Time
-            Stop date and time of the night.
-
-        Notes
-        -----
-        The start and stop time depends on the definition of the twilight. This
-        is set as fixed parameter in the database.
-        """
-
-        datetime = datetime.to_datetime()
-        year = datetime.year
-        month = datetime.month
-        day = datetime.day
-
-        self._setup_telescope(telescope, no_constraints=True)
-        night_start, night_stop = self.telescope.get_sun_set_rise(
-                year, month, day, self.twilight)
-
-        return night_start, night_stop
-
-    #--------------------------------------------------------------------------
-    def iter_fields(
-            self, telescope=None, observed=None, pending=None, active=True):
-        """Iterate through fields, given specific selection criteria.
-
-        Parameters
-        ----------
-        telescope : str, optional
-            Iterate only through fields associated with this telescope.
-            If None, iterate through all fields irregardless of the associated
-            telescope.
-        observed : bool or None, optional
-            If True, iterate only through fields that have been observed at
-            least once. If False, iterate only through fields that have never
-            been observed. If None, iterate through fields irregardless of
-            whether they have  been observed or not. The default is None.
-        pending : bool or None, optional
-            If True, iterate only through fields that have pending observations
-            associated. If False, only iterate through fields that have no
-            pending observations associated. If None, iterate through fields
-            irregardless of whether they have pending observations associated
-            or not. The default is None.
-        active : bool or None, optional
-            If True, only iterate through active fields. If False, only iterate
-            through inactive fields. If None, iterate through fields active or
-            not. The default is True.
-
-        Yields
-        ------
-        field : Field
-            Field(s) fulfilling the selected criteria.
-        """
-
-        # connect to database:
-        db = DBConnectorSQLite(self.dbname)
-
-        for field in db.get_fields(
-                telescope=telescope, observed=observed, pending=pending,
-                active=active):
-            yield self._dict_to_field(field)
-
-    #--------------------------------------------------------------------------
-    def get_fields(
+    def _get_fields(
             self, telescope=None, observed=None, pending=None, active=True):
         """Get a list of fields, given specific selection criteria.
 
         Parameters
         ----------
         telescope : str, optional
-            Only get fields associated with this telescope. If None, get all
-            fields irregardless of the associated telescope.
+            If specified, only fields associated with this telescope are
+            returned. The default is None.
         observed : bool or None, optional
-            If True, only get fields that have been observed at least once. If
-            False, only get fields that have never been observed. If None, get
-            fields irregardless of whether they have  been observed or not. The
-            default is None.
+            If True, only fields that have been observed at least once are
+            returned. If False, only fields that have never been observed are
+            returned. If None, fields are returned regardless of whether they
+            have been observed or not. The default is None.
         pending : bool or None, optional
-            If True, only get fields that have pending observations associated.
-            If False, only get fields that have no pending observations
-            associated. If None, get fields irregardless of whether they have
-            pending observations associated or not. The default is None.
+            If True, only fields that have pending observations associated are
+            returned. If False, only fields that have no pending observations
+            associated are returned. If None, fields are returned regardless of
+            whether they have pending observations associated or not. The
+            default is None.
         active : bool or None, optional
-            If True, only get active fields. If False, only get inactive
-            fields. If None, get fields active or not. The default is True.
+            If True, only active fields are returned. If False, only inactive
+            fields are returned. If None, active and deactivated fields are
+            returned. The default is True.
 
         Returns
         -------
-        results : list of dict
+        fields : list of dict
             Each list item is a dict with the field parameters.
         """
 
-        fields = [field for field in self.iter_fields(
+        # connect to database:
+        field_manager = FieldManager(self.dbname)
+
+        fields = field_manager.get_fields(
                 telescope=telescope, observed=observed, pending=pending,
-                active=active)]
+                active=active)
 
         return fields
 
     #--------------------------------------------------------------------------
-    def get_field_by_id(self, field_id, db=None):
-        """Get a field by its database ID.
+    def get_fields(
+            self, observable_night=None, observable_time=None, telescope=None,
+            observed=None, pending=None, active=True):
+        """Get a list of fields, given specific selection criteria.
 
         Parameters
         ----------
-        field_id : int
-            ID of the field as stored in the database.
-        db : db.DBConnectorSQLite, optional
-            Active database connection. If none provided a new connection is
-            established. The default is None.
-
-        Raises
-        ------
-        ValueError
-            Raise if no field with this ID exists.
-
-        Returns
-        -------
-        field : Field
-            Field as stored in the database under specified ID.
-        """
-
-        # connect to database:
-        if db is None:
-            db = DBConnectorSQLite(self.dbname)
-
-        field = db.get_field_by_id(field_id)
-
-        if not len(field):
-            raise ValueError(f"Field with ID {field_id} does not exist.")
-
-        field = self._dict_to_field(field[0])
-
-        return field
-
-    #--------------------------------------------------------------------------
-    def iter_fields_by_ids(self, field_ids):
-        """Yield Field instances by their database ID.
-
-        Parameters
-        ----------
-        field_ids : list
-            IDs of the fields as stored in the database.
-
-        Raises
-        ------
-        ValueError
-            Raise if no field with this ID exists.
-
-        Yields
-        -------
-        field : Field
-            Field as stored in the database under specified ID.
-        """
-
-        # connect to database:
-        db = DBConnectorSQLite(self.dbname)
-
-        for field_id in field_ids:
-            field = self.get_field_by_id(field_id, db=db)
-
-            yield field
-
-    #--------------------------------------------------------------------------
-    def iter_field_ids_in_circles(
-            self, circle_center, radius, telescope=None, observed=None,
-            pending=None, active=True):
-        """Iterate through different circle center locations and yield the IDs
-        of fields located in those circles.
-
-        Parameters
-        ----------
-        circle_center : astropy.coordinates.SkyCoord
-            Center coordinates of the circle(s). A single coordinate or
-            multiple coordinates can be provided in a SkyCoord instance.
-        radius : astropy.units.Quantity
-            The circle radius in deg or rad.
+        observable_night : astropy.time.Time, optional
+            If a date is given, only fields are returned that are observable
+            during the night that starts on the specified date. Time
+            information is truncated. Either set this argument or
+            `observable_time` If this argument is set, `observable_time` is not
+            used. The default is None.
+        observable_time : astropy.time.Time, optional
+            If a date and time is given, only fields are returned that are
+            observable at that specific time. Either set this argument or
+            `observable_night`. If `observable_night` is given, this argument
+            is ignored. The default is None.
         telescope : str, optional
-            Only count fields associated with this telescope. If None, count
-            all fields irregardless of the associated telescope.
+            If specified, only fields associated with this telescope are
+            returned. The default is None.
         observed : bool or None, optional
-            If True, only count fields that have been observed at least once.
-            If False, only count fields that have never been observed. If None,
-            count fields irregardless of whether they have been observed or
-            not. The default is None.
+            If True, only fields that have been observed at least once are
+            returned. If False, only fields that have never been observed are
+            returned. If None, fields are returned regardless of whether they
+            have been observed or not. The default is None.
         pending : bool or None, optional
-            If True, only count fields that have pending observations
-            associated. If False, only count fields that have no pending
-            observations associated. If None, count fields irregardless of
+            If True, only fields that have pending observations associated are
+            returned. If False, only fields that have no pending observations
+            associated are returned. If None, fields are returned regardless of
             whether they have pending observations associated or not. The
             default is None.
         active : bool or None, optional
-            If True, only count active fields. If False, only count inactive
-            fields. If None, count fields active or not. The default is True.
-
-        Raises
-        ------
-        ValueError
-            Raised if a data type other than SkyCoord is provided for
-            'circle_center'..
-
-        Yields
-        ------
-        numpy.ndarray
-            Each int-dtype array lists the IDs of the fields located in the
-            circle with the corresponding center coordinates, where the fields
-            fulfill the selection criteria.
-        """
-
-        # check input:
-        if not isinstance(circle_center, SkyCoord):
-            raise ValueError("'circle_center' has to be SkyCoord instance.")
-
-        # convert scalar to array:
-        if not circle_center.shape:
-            circle_center = SkyCoord([circle_center.ra], [circle_center.dec])
-
-        # get coordinates of all fields meeting selection criteria:
-        fields_id = []
-        fields_ra = []
-        fields_dec = []
-
-        for field in self.iter_fields(
-                telescope=telescope, observed=observed, pending=pending,
-                active=active):
-
-            fields_id.append(field.id)
-            fields_ra.append(field.center_ra)
-            fields_dec.append(field.center_dec)
-
-        fields_id = np.array(fields_id)
-        fields_coord = SkyCoord(fields_ra, fields_dec)
-        del fields_ra, fields_dec
-
-        # iterate through circle center coordinates:
-        for coord in circle_center:
-            in_circle = fields_coord.separation(coord) <= radius
-
-            yield fields_id[in_circle]
-
-    #--------------------------------------------------------------------------
-    def count_neighbors(
-            self, radius, field_ids, telescope=None, observed=None,
-            pending=None, active=True):
-        """Count the neighbors of specificied fields given various criteria.
-
-        Parameters
-        ----------
-        radius : astropy.units.Quantity
-            Radius in which to count field neighbors. Needs to be a Quantity
-            with unit 'rad' or 'deg'.
-        field_ids : int or list
-            ID of the field whose neighbors are searched for. Or list of
-            multiple such IDs.
-        telescope : str, optional
-            Only count fields associated with this telescope. If None, count
-            all fields irregardless of the associated telescope.
-        observed : bool or None, optional
-            If True, only count fields that have been observed at least once.
-            If False, only count fields that have never been observed. If None,
-            count fields irregardless of whether they have been observed or
-            not. The default is None.
-        pending : bool or None, optional
-            If True, only count fields that have pending observations
-            associated. If False, only count fields that have no pending
-            observations associated. If None, count fields irregardless of
-            whether they have pending observations associated or not. The
-            default is None.
-        active : bool or None, optional
-            If True, only count active fields. If False, only count inactive
-            fields. If None, count fields active or not. The default is True.
+            If True, only active fields are returned. If False, only inactive
+            fields are returned. If None, active and deactivated fields are
+            returned. The default is True.
 
         Returns
         -------
-        neighbor_count : numpy.ndarray or int
-            Lists the number of field neighbors within the specified radius
-            that fulfill the conditions for each of the input field IDs.
-            If an integer was provided for 'field_ids', an integer is returned,
-            otherwise a numpy.ndarray of integer-dtype.
+        fields : list of dict
+            Each list item is a dict with the field parameters.
         """
 
-        if isinstance(field_ids, int):
-            field_ids = [field_ids]
-            return_int = True
+        # get fields observable during a specific night:
+        if observable_night is not None:
+            # check input:
+            if observable_night.iso[11:] != '00:00:00.000':
+                print("WARNING: For argument `observable_night` provide " \
+                      "date only. Time information is truncated. To get " \
+                      "fields observable at specific time use the " \
+                      "`observable_time` argument.")
+
+            # get fields:
+            fields = self._get_observable_fields_by_night(
+                    observable_night, telescope=telescope, observed=observed,
+                    pending=pending, active=active)
+
+        # get fields observable at a specific time:
+        elif observable_time is not None:
+            fields = self._get_observable_fields_by_datetime(
+                    observable_time, telescope=telescope, observed=observed,
+                    pending=pending, active=active)
+
+        # get fields regardless of their observability status:
         else:
-            return_int = False
+            fields = self._get_fields(
+                    telescope=telescope, observed=observed, pending=pending,
+                    active=active)
 
-        # get coordinates of fields of interest:
-        fields_ra = []
-        fields_dec = []
-
-        for field in self.iter_fields_by_ids(field_ids):
-            fields_ra.append(field.center_ra)
-            fields_dec.append(field.center_dec)
-
-        fields_coord = SkyCoord(fields_ra, fields_dec)
-        del fields_ra, fields_dec
-
-        # iterate through field coordinates and count neighbors:
-        n_neighbors = np.zeros(len(field_ids), dtype=int)
-
-        for i, neighbor_ids in enumerate(self.iter_field_ids_in_circles(
-                fields_coord, radius, telescope=telescope,
-                observed=observed, pending=pending, active=active)):
-
-            n_neighbors[i] = neighbor_ids.shape[0]
-
-            # reduce count by 1 if field is part of the list:
-            if field_ids[i] in neighbor_ids:
-                n_neighbors[i] -= 1
-
-        if return_int:
-            n_neighbors = int(n_neighbors)
-
-        return n_neighbors
+        return fields
 
 #==============================================================================
 
