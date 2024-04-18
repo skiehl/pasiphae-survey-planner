@@ -42,7 +42,7 @@ if __name__ == '__main__':
 
     timeit_start = Time.now()
     planner = ObservabilityPlanner(db_name)
-    planner.check_observability(
+    planner.observability(
             date_stop, date_start=date_start, duration_limit=duration_limit,
             processes=processes, batch_write=batch_write,
             time_interval_init=time_interval_init,

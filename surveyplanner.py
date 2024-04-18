@@ -1705,9 +1705,9 @@ class ObservabilityPlanner:
         writer.join()
 
     #--------------------------------------------------------------------------
-    def check_observability(
+    def observability(
             self, date_stop, date_start=None, duration_limit=60,
-            batch_write=10000, processes=1, time_interval_init=600,
+            batch_write=100, processes=1, time_interval_init=600,
             time_interval_refine=60, days_before=7, days_after=7,
             outlier_threshold=0.7, status_threshold=6, all_fields=False):
         """Calculate observing windows for all active fields and add them to
