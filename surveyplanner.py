@@ -1021,23 +1021,22 @@ class ObservabilityPlanner:
           `_add_obs_windows()`.
         """
 
-        done = False
         jd_next = jd + 1
 
-        while not done:
+        while True:
             sleep(1)
             n_done = counter.value
             n_queued = queue_obs_windows.qsize()
 
-            if n_done >= n_tbd:
-                done = True
+            if n_done >= n_tbd and n_queued == 0:
+                break
 
             print(f'\rCalculations: {n_done}/{n_tbd} ' \
                   f'({n_done/n_tbd*100:.1f}%). Queued: {n_queued}. '\
                   'Processing..                                      ', end='')
 
             # extract batch of results from queue:
-            if done or n_queued >= batch_write:
+            if n_done >= n_tbd or n_queued >= batch_write:
                 print(f'\rCalculations: {n_done}/{n_tbd} ' \
                       f'({n_done/n_tbd*100:.1f}%). Queued: {n_queued}. ' \
                       'Reading from queue..                          ', end='')
@@ -1707,7 +1706,7 @@ class ObservabilityPlanner:
     #--------------------------------------------------------------------------
     def observability(
             self, date_stop, date_start=None, duration_limit=60,
-            batch_write=100, processes=1, time_interval_init=600,
+            batch_write=1000, processes=1, time_interval_init=600,
             time_interval_refine=60, days_before=7, days_after=7,
             outlier_threshold=0.7, status_threshold=6, all_fields=False):
         """Calculate observing windows for all active fields and add them to
