@@ -1439,7 +1439,8 @@ class FieldManager(DBManager):
 
     #--------------------------------------------------------------------------
     def get_fields(
-            self, telescope=None, observed=None, pending=None, active=True,
+            self, telescope=None, observed=None, pending=None,
+            observable_between=None, observable_time=None, active=True,
             needs_obs_windows=None, init_obs_windows=False):
         """Get fields from the database, given various selection criteria.
 
@@ -1459,15 +1460,21 @@ class FieldManager(DBManager):
             associated. If False, only query fields that have no pending
             observations associated. If None, query fields independent of
             whether observations are pending or not. The default is None.
+        observable_between : tuple of str or None, optional
+            Provide two strings that encode date+time. Then, only fields are
+            returned that are observable (at least for some time) between the
+            two specified times. Either set this argument or
+            `observable_time`. If this argument is set, `observable_time` is
+            not used. The default is None.
+        observable_time : str or None, optional
+            Provide a string that encodes a date+time. Then, only fields are
+            returned that are observable at that specific time. Either set this
+            argument or `observable_between`. If `observable_between` is given,
+            this argument is ignored. The default is None.
         active : bool, optional
             If True, only query active fields. If False, only query inactive
             fields. If None, query fields independent of whether they are
             active or not. The default is True.
-        include_timerange : bool or str, optional
-            If True, time range of the latest observing window calculations is
-            included. If 'all', all time ranges associated with the active
-            parameter set are included. If False, no time ranges are included.
-            The default is False.
         needs_obs_window : float or None, optional
             If JD is given, only fields are returned that need additional
             observing window calculations up to this JD. The default is None.
@@ -1515,6 +1522,47 @@ class FieldManager(DBManager):
         else:
             condition_telescope = ""
 
+        # set query condition for observable between two dates:
+        if observable_between:
+            join_sel = ", w.date_start, w.date_stop, w.duration, w.status, " \
+                    "w.setting_duration"
+            join_observable = """\
+                INNER JOIN (
+                	SELECT *
+                	FROM Observable
+                	WHERE (
+                		(date_start >= "{0}"
+                		AND date_start <= "{1}")
+                		OR
+                		(date_stop >= "{0}"
+                		AND date_stop <= "{1}")
+                		OR
+                		(date_start <= "{0}"
+                		AND date_stop >= "{1}")
+                		)
+                	) AS w
+                ON f.field_id = w.field_id
+                """.format(observable_between[0], observable_between[1])
+
+        # set query condition for observable at a specific time:
+        elif observable_time:
+            join_sel = ", w.date_start, w.date_stop, w.duration, w.status, " \
+                    "w.setting_duration"
+            join_observable = """\
+                INNER JOIN (
+                	SELECT *
+                	FROM Observable
+                	WHERE (
+                		date_start <= "{0}"
+                		AND date_stop >= "{0}")
+                	) AS w
+                ON f.field_id = w.field_id
+                """.format(observable_time)
+
+        else:
+            join_sel = ""
+            join_observable = ""
+
         # set query condition for observing window requirement:
         if needs_obs_windows:
             condition_obswindow = " AND jd_next < '{0}'".format(
@@ -1527,12 +1575,16 @@ class FieldManager(DBManager):
         # query data base:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT *
-                FROM FieldsObs
-                WHERE (active = {0} {1} {2} {3} {4});
+                SELECT f.field_id, f.fov, f.center_ra, f.center_dec, f.tilt,
+                    f.telescope, f.active, f.jd_first, f.jd_next, f.nobs_tot,
+                    f.nobs_done, f.nobs_pending {0}
+                FROM FieldsObs AS f
+                {1}
+                WHERE (active = {2} {3} {4} {5} {6});
                 """.format(
-                        active, condition_telescope, condition_observed,
-                        condition_pending, condition_obswindow)
+                        join_sel, join_observable, active, condition_telescope,
+                        condition_observed, condition_pending,
+                        condition_obswindow)
             results = self._query(connection, query).fetchall()
 
         return results
@@ -3859,6 +3911,24 @@ class DBCreator(DBManager):
                 """
             self._query(connection, query, commit=True)
             print("View 'FieldsObs' created.")
+
+            # create Observable view:
+            query = """\
+                CREATE VIEW Observable AS
+                    SELECT o.field_id, ow.date_start, ow.date_stop,
+                        ow.duration, os.status, o.setting_duration
+                    FROM Observability o
+                    LEFT JOIN ObservabilityStatus os
+                    ON o.status_id = os.status_id
+                    INNER JOIN ObsWindows ow
+                    ON o.observability_id = ow.observability_id
+                    WHERE (
+                    	o.active = 1
+                    	AND ow.active = 1
+                    	);
+                """
+            self._query(connection, query, commit=True)
+            print("View 'Observable' created.")
 
             # define constraints:
             query = """\
