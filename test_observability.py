@@ -19,13 +19,13 @@ processes = 2
 batch_write = 300
 all_fields = True
 
-date_stop = Time('2025-01-01')
+date_stop = Time('2024-01-02')
 date_start = Time('2024-01-01')
 
-reset_db = False
+reset_db = True
 db_init = 'test_planner_init.sqlite3'
-#db_name = 'test_planner_temp.sqlite3'
-db_name = 'test_planner.sqlite3'
+db_name = 'test_planner_temp.sqlite3'
+#db_name = 'test_planner.sqlite3'
 
 #==============================================================================
 # MAIN

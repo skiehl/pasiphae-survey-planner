@@ -1955,10 +1955,10 @@ class ObservabilityPlanner:
             field_manager = FieldManager(self.dbname)
             fields_init = field_manager.get_fields(
                     telescope=telescope_name, pending=pending,
-                    include_timerange=True, init_obs_windows=True)
+                    init_obs_windows=True)
             fields_tbd = field_manager.get_fields(
                     telescope=telescope_name, pending=pending,
-                    include_timerange=True, needs_obs_windows=jd_stop)
+                    needs_obs_windows=jd_stop)
             del field_manager
 
             with Pool(processes=processes) as pool:

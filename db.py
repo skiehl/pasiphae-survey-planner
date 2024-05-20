@@ -1440,8 +1440,7 @@ class FieldManager(DBManager):
     #--------------------------------------------------------------------------
     def get_fields(
             self, telescope=None, observed=None, pending=None, active=True,
-            include_timerange=False, needs_obs_windows=None,
-            init_obs_windows=False):
+            needs_obs_windows=None, init_obs_windows=False):
         """Get fields from the database, given various selection criteria.
 
         Parameters
@@ -1469,7 +1468,7 @@ class FieldManager(DBManager):
             included. If 'all', all time ranges associated with the active
             parameter set are included. If False, no time ranges are included.
             The default is False.
-        needs_obs_window : float, optional
+        needs_obs_window : float or None, optional
             If JD is given, only fields are returned that need additional
             observing window calculations up to this JD. The default is None.
         init_obs_windows : bool, optional
@@ -1481,7 +1480,6 @@ class FieldManager(DBManager):
         ValueError
             Raised, if `needs_obs_window` is set and `init_obs_windows=True`.
             Only one option can be selected at a time.
-            Raise, if `include_timerange` is neither Boolean nor 'all'.
 
         Returns
         -------
@@ -1494,15 +1492,6 @@ class FieldManager(DBManager):
             raise ValueError(
                     'Either set `needs_obs_window` OR use '\
                     '`init_obs_windows=True`.')
-
-        if not (isinstance(include_timerange, bool) \
-                or include_timerange == 'all'):
-            raise ValueError(
-                '`include_timerange` must be True, False, or "all".')
-
-        if include_timerange == 'all':
-            raise NotImplementedError()
-            # TODO
 
         # set query condition for observed or not:
         if observed is None:
@@ -1522,7 +1511,7 @@ class FieldManager(DBManager):
 
         # set query condition for telescope:
         if telescope:
-            condition_telescope = " AND name = '{0}'".format(telescope)
+            condition_telescope = " AND telescope = '{0}'".format(telescope)
         else:
             condition_telescope = ""
 
@@ -1535,40 +1524,13 @@ class FieldManager(DBManager):
         else:
             condition_obswindow = ""
 
-        # set query elements for active time ranges:
-        if include_timerange is True:
-            query_timerange_sel = "r.jd_first, r.jd_next,"
-            query_timerange = """\
-                LEFT JOIN (
-            	SELECT field_id, jd_first, jd_next
-            	FROM TimeRanges
-            	WHERE active = 1) AS r
-                ON f.field_id = r.field_id
-                """
-        else:
-            query_timerange_sel = ""
-            query_timerange = ""
-
         # query data base:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
-                    f.tilt, t.name AS telescope, f.active, {0} p.nobs_tot,
-                    p.nobs_done, p.nobs_tot - p.nobs_done AS nobs_pending
-                FROM Fields AS f
-                {1}
-                LEFT JOIN Telescopes AS t
-                    ON f.telescope_id = t.telescope_id
-                LEFT JOIN (
-                	SELECT field_id, SUM(Done) nobs_done, COUNT(*) nobs_tot
-                	FROM Observations
-                    WHERE active = 1
-                	GROUP BY field_id
-                	) AS p
-                ON f.field_id = p.field_id
-                WHERE (active = {2} {3} {4} {5} {6});
+                SELECT *
+                FROM FieldsObs
+                WHERE (active = {0} {1} {2} {3} {4});
                 """.format(
-                        query_timerange_sel, query_timerange,
                         active, condition_telescope, condition_observed,
                         condition_pending, condition_obswindow)
             results = self._query(connection, query).fetchall()
@@ -3871,6 +3833,32 @@ class DBCreator(DBManager):
                 """
             self._query(connection, query, commit=True)
             print("Table 'Filters' created.")
+
+            # create FieldsObs view:
+            query = """\
+                CREATE VIEW FieldsObs AS
+                SELECT f.field_id, f.fov, f.center_ra, f.center_dec,
+                    f.tilt, t.name AS telescope, f.active, r.jd_first,
+                    r.jd_next, p.nobs_tot, p.nobs_done,
+                    p.nobs_tot - p.nobs_done AS nobs_pending
+                FROM Fields AS f
+                LEFT JOIN (
+                	SELECT field_id, jd_first, jd_next
+                	FROM TimeRanges
+                	WHERE active = 1) AS r
+                ON f.field_id = r.field_id
+                LEFT JOIN Telescopes AS t
+                ON f.telescope_id = t.telescope_id
+                LEFT JOIN (
+                	SELECT field_id, SUM(Done) nobs_done, COUNT(*) nobs_tot
+                	FROM Observations
+                    WHERE active = 1
+                	GROUP BY field_id
+                	) AS p
+                ON f.field_id = p.field_id;
+                """
+            self._query(connection, query, commit=True)
+            print("View 'FieldsObs' created.")
 
             # define constraints:
             query = """\
