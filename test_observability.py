@@ -16,15 +16,16 @@ time_interval_init = 600 * u.s
 time_interval_refine = 60 * u.s
 duration_limit = 5 * u.min
 processes = 2
-batch_write = 100
+batch_write = 300
 all_fields = True
 
-date_stop = Time('2024-01-02')
+date_stop = Time('2025-01-01')
 date_start = Time('2024-01-01')
 
-reset_db = True
+reset_db = False
 db_init = 'test_planner_init.sqlite3'
-db_name = 'test_planner_temp.sqlite3'
+#db_name = 'test_planner_temp.sqlite3'
+db_name = 'test_planner.sqlite3'
 
 #==============================================================================
 # MAIN

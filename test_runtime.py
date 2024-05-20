@@ -12,9 +12,9 @@ from surveyplanner import ObservabilityPlanner
 # CONFIG
 #==============================================================================
 
-n_tests = 1
-processes = 5
-batch_write = (100, 200, 500, 1000, 2000)
+n_tests = 3
+processes = (1, 2)
+batch_write = (100, 200, 300, 400, 500)
 time_interval_init = 600 # sec
 time_interval_refine = 60 # sec
 
@@ -22,14 +22,14 @@ date_stop = Time('2024-01-02')
 date_start = Time('2024-01-01')
 n_days = int(round((date_stop - date_start).value, 0))
 
-computer = 'kallisto'
+computer = 'laptop-linux'
 
 reset_db = True
-#db_init = 'test_planner_init.sqlite3'
-db_init = 'test_strategy_init.sqlite3 '
+db_init = 'test_planner_init.sqlite3'
+#db_init = 'test_strategy_init.sqlite3 '
 db_name = 'test_runtime.sqlite3'
 
-save_runtime = 'runtime_tests_5_fullgrid_kallisto_add.dat'
+save_runtime = 'runtime_tests_5_testgrid_laptop.dat'
 #save_runtime = False
 
 #==============================================================================

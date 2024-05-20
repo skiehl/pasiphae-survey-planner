@@ -9,6 +9,7 @@ from itertools import repeat
 from multiprocessing import Manager, Pool, Process
 import numpy as np
 from pandas import DataFrame
+from statsmodels.api import add_constant, OLS
 from time import sleep
 from textwrap import dedent
 
@@ -1389,23 +1390,23 @@ class ObservabilityPlanner:
         # status string to status ID converter:
         status_to_id = db.status_to_id_converter()
 
-        done = False
-
-        while not done:
+        while True:
             sleep(1)
             n_done = counter.value
             n_queued = queue_status.qsize()
 
-            if n_done >= n_tbd:
-                done = True
+            if n_done >= n_tbd and n_queued == 0:
+                break
 
-            print(f'\rProgress: field {n_done} of {n_tbd} ' \
-                  f'({n_done/n_tbd*100:.1f}%)..           ', end='')
+            print(f'\rCalculations: {n_done}/{n_tbd} ' \
+                  f'({n_done/n_tbd*100:.1f}%). Queued: {n_queued}. ' \
+                  'Processing..                             ', end='')
 
             # extract batch of results from queue:
-            if done or n_queued >= batch_write:
-                print('\rProgress: reading from queue..                      ',
-                      end='')
+            if n_done >= n_tbd or n_queued >= batch_write:
+                print(f'\rCalculations: {n_done}/{n_tbd} ' \
+                      f'({n_done/n_tbd*100:.1f}%). Queued: {n_queued}. ' \
+                      f'Reading from queue..                     ', end='')
                 batch_observability_ids, batch_status, \
                 batch_setting_in = self._read_status_from_queue(
                         db, queue_status, batch_write, status_to_id)
@@ -1417,8 +1418,9 @@ class ObservabilityPlanner:
 
             # write results to database:
             if write:
-                print(f'\rProgress: writing {n_queried} entries to database..',
-                      end='')
+                print(f'\rCalculations: {n_done}/{n_tbd} ' \
+                      f'({n_done/n_tbd*100:.1f}%). Queued: {n_queued}. ' \
+                      f'Writing {n_queried} entries to database..', end='')
 
                 # update observabilities in database:
                 db.update_observability_status(
@@ -1427,7 +1429,8 @@ class ObservabilityPlanner:
 
                 n_done += n_queried
 
-        print('\rProgress: done                                              ')
+        print('\rProgress: done                                             ' \
+              '                        ')
 
     #--------------------------------------------------------------------------
     def _get_obs_window_durations(self, db, field_id, jd_start, jd_stop):
@@ -1464,6 +1467,113 @@ class ObservabilityPlanner:
         durations['update'] = np.zeros(durations.shape[0], dtype=bool)
 
         return durations
+
+    #--------------------------------------------------------------------------
+    def _detect_outliers(self, jd, duration, outlier_threshold=0.6):
+        """Outlier detection using Cook's distance.
+
+        Parameters
+        ----------
+        jd : array-like
+            JD.
+        duration : array-like
+            Durations of the observing windows for each JD.
+        outlier_threshold : float, optional
+            Threshold for outlier detection. Data points with a Cook's distance
+            p-value lower than this threshold are considered outliers. The
+            default is 0.6.
+
+        Returns
+        -------
+        outliers : numpy.ndarray (dtype: bool)
+            True, for detected outliers. False, otherwise.
+
+        Notes
+        -----
+        - This method is called by `_update_status_for_field()`.
+        """
+
+        x = np.asarray(jd)
+        y = np.asarray(duration)
+
+        # linear regression:
+        x = add_constant(x)
+        model = OLS(y, x).fit()
+
+        # check for outliers:
+        influence = model.get_influence()
+        __, cooks_pval = influence.cooks_distance
+        outliers = cooks_pval < outlier_threshold
+
+        return outliers
+
+    #--------------------------------------------------------------------------
+    def _get_status(
+            self, jd, jds, durations, time_interval, status_threshold=6,
+            mask_outl=None):
+        """Status based on linear ordinary least square regression with
+        exclusion of outliers.
+
+        Parameters
+        ----------
+        jd : float
+            JD of the date of interest.
+        jds : array-like
+            JDs of the observing windows.
+        durations : array-like
+            Durations of the observing windows for each JD.
+        time_interval : astropy.time.TimeDelta
+            Time accuracy at which the observing windows were calculated. The
+            status is considered "plateauing" if the standard deviation
+            of the durations is smaller than this time interval times the
+            status_threshold.
+        status_threshold : float, optional
+            Scaling factor. See description of time_interval. The default is 6.
+        mask_outl : numpy.ndarray (dtype: bool) or None, optional
+            If given, Trues mark outliers that are removed from the OLS. The
+            default is None.
+
+        Returns
+        -------
+        status : str
+            Either "rising", "plateauing", or "setting".
+        setting_in : float
+            If the status is "setting" this is the duration in days, when the
+            field is setting. Otherwise a numpy.nan is returned.
+
+        Notes
+        -----
+        - This method is called by `_update_status_for_field()`.
+        """
+
+        x = np.asarray(jds)
+        y = np.asarray(durations)
+
+        # remove outliers:
+        if mask_outl is not None:
+            x = x[~mask_outl]
+            y = y[~mask_outl]
+
+        # get status:
+        if y.std() <= time_interval.value * status_threshold:
+            status = 'plateauing'
+            setting_in = np.nan
+
+        elif np.median(np.diff(y)) > 0:
+            status = 'rising'
+            setting_in = np.nan
+
+        else:
+            status = 'setting'
+
+            # linear regression for setting duration:
+            x = add_constant(x)
+            model = OLS(y, x).fit()
+            slope = model.params[1]
+            intercept = model.params[0]
+            setting_in = -intercept / slope - jd
+
+        return status, setting_in
 
     #--------------------------------------------------------------------------
     def _update_unknown_status(self, durations):
