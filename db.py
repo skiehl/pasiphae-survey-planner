@@ -1384,7 +1384,7 @@ class FieldManager(DBManager):
         ------
         ValueError
             Raised, if 'fields' is not FieldGrid instance.
-            Raised, if 'n_batch' is not integer > 0.
+            Raised, if 'n_batch' is not an integer > 0.
 
         Returns
         -------
@@ -1712,11 +1712,11 @@ class FieldManager(DBManager):
 #==============================================================================
 
 class GuidestarManager(DBManager):
-    """Database manager for guide stars."""
+    """Database manager for guidestars."""
 
     #--------------------------------------------------------------------------
     def _get_by_field_id(self, field_id, active=True):
-        """Get guide stars for a specific field from database.
+        """Get guidestars for a specific field from database.
 
         Parameters
         ----------
@@ -1758,7 +1758,7 @@ class GuidestarManager(DBManager):
 
     #--------------------------------------------------------------------------
     def _get_all(self, active=True):
-        """Get all guide stars from database.
+        """Get all guidestars from database.
 
         Parameters
         ----------
@@ -1822,6 +1822,8 @@ class GuidestarManager(DBManager):
         decs : astropy.coord.Angle
             Declinations of the kept guidestars.
         """
+
+        print('Checking for repetitions..')
 
         # get stored guidestar coordinates and associated field IDs:
         stored_gs_id = []
@@ -1916,6 +1918,8 @@ class GuidestarManager(DBManager):
             Declinations of the kept guidestars.
         """
 
+        print('Checking for large separations..')
+
         keep = np.ones(len(field_ids), dtype=bool)
 
         with SQLiteConnection(self.db_file) as connection:
@@ -1938,7 +1942,7 @@ class GuidestarManager(DBManager):
 
                 # ask user about critical cases:
                 if separation > limit:
-                    print(f'New guide star {i} for field ID {field_id} is too '
+                    print(f'New guidestar {i} for field ID {field_id} is too '
                           'far from the field center with separation '
                           '{0}.'.format(separation.to_string(sep='dms')))
                     user_in = input('Add it to the database anyway? (y/n) ')
@@ -1967,6 +1971,8 @@ class GuidestarManager(DBManager):
         This method calls `get_fields_missing_guidestar()`.
         """
 
+        print('Checking for fields missing guidestars..')
+
         # query data base:
         field_ids = self.get_fields_missing_guidestar()
 
@@ -1979,10 +1985,12 @@ class GuidestarManager(DBManager):
             for field_id in field_ids['none']:
                 text = f'{text}{field_id}, '
 
+            print(text[:-2])
+
         # inform user about fields without active guidestars:
         if field_ids['inactive']:
             print('\nWARNING: Fields with the following IDs do not have '
-                  'any guidestars associated:')
+                  'active (but inactive) guidestars associated:')
             text = ''
 
             for field_id in field_ids['inactive']:
@@ -1990,12 +1998,13 @@ class GuidestarManager(DBManager):
 
             print(text[:-2])
 
-            print(text[:-2])
+        if not field_ids['none'] and not field_ids['inactive']:
+            print('All fields have at least one guidestar associated.')
 
         return field_ids
 
     #--------------------------------------------------------------------------
-    def _add_guidestar(self, field_ids, ras, decs):
+    def _add_guidestar(self, field_ids, ras, decs, n_batch=1000):
         """Add new guidestars to the database.
 
         Parameters
@@ -2006,28 +2015,45 @@ class GuidestarManager(DBManager):
             Guidestar right ascensions.
         decs : astropy.coord.Angle
             Guidestar declinations.
+        n_batch : int, optinal
+            Add guidestars in batches of this size to the data base. The
+            default is 1000.
 
         Returns
         -------
         None
         """
 
-        data = [(int(field_id), float(ra), float(dec), True) \
-                for field_id, ra, dec in zip(field_ids, ras.rad, decs.rad)]
+        n_guidestars = len(field_ids)
+        n_iter = ceil(n_guidestars / n_batch)
 
         with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO Guidestars (
-                    field_id, ra, dec, active)
-                VALUES (?, ?, ?, ?)
-                """
-            self._query(connection, query, many=data, commit=True)
+            # iterate through batches:
+            for i in range(n_iter):
+                j = i * n_batch
+                k = (i + 1) * n_batch
+                print(
+                    '\rAdding guidestars {0}-{1} of {2} ({3:.1f}%)..'.format(
+                            j, k-1 if k <= n_guidestars else n_guidestars,
+                            n_guidestars, i*100./n_iter),
+                    end='')
 
-        print(f'{len(data)} new guidestars added to database.')
+                data = [(int(field_id), float(ra), float(dec), True) \
+                        for field_id, ra, dec in zip(
+                                field_ids[j:k], ras.rad[j:k], decs.rad[j:k])]
+
+                query = """\
+                    INSERT INTO Guidestars (
+                        field_id, ra, dec, active)
+                    VALUES (?, ?, ?, ?)
+                    """
+                self._query(connection, query, many=data, commit=True)
+
+        print(f'\r{n_guidestars} new guidestars added to database.           ')
 
     #--------------------------------------------------------------------------
     def add_guidestars(self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
-            warn_sep=0):
+            warn_sep=0, n_batch=1000):
         """Add new guidestar(s) to the database.
 
         Parameters
@@ -2052,16 +2078,20 @@ class GuidestarManager(DBManager):
             about new guidestars that may be too far off from the corresponding
             field center. The value in `warn_sep` is the largest separation
             allowed. A float is interpreted as angle in rad. The default is 0.
+        n_batch : int, optinal
+            Add guidestars in batches of this size to the data base. The
+            default is 1000.
 
         Raises
         ------
         ValueError
-            Raised if, `field_ids` is neither int nor list-like.
-            Raised if, `ra` is neither float nor list-like.
-            Raised if, `dec` is neither float nor list-like.
-            Raised if, `warn_missing` is not bool.
-            Raised if, `warn_rep` is neither float nor astropy.coord.Angle.
-            Raised if, `warn_sep` is neither float nor astropy.coord.Angle.
+            Raised, if `field_ids` is neither int nor list-like.
+            Raised, if `ra` is neither float nor list-like.
+            Raised, if `dec` is neither float nor list-like.
+            Raised, if `warn_missing` is not bool.
+            Raised, if `warn_rep` is neither float nor astropy.coord.Angle.
+            Raised, if `warn_sep` is neither float nor astropy.coord.Angle.
+            Raised, if 'n_batch' is not an integer > 0.
 
         Returns
         -------
@@ -2109,8 +2139,11 @@ class GuidestarManager(DBManager):
             separation_rep = warn_rep
             warn_rep = True
         elif type(warn_rep ) in [float, int, np.float64]:
-            separation_rep = Angle(warn_rep, unit='rad')
-            warn_rep = True
+            if warn_rep > 0:
+                separation_rep = Angle(warn_rep, unit='rad')
+                warn_rep = True
+            else:
+                warn_rep = False
         elif warn_rep:
             raise ValueError(
                     '`warn_rep` must be astropy.coordinates.Angle or float.')
@@ -2119,11 +2152,17 @@ class GuidestarManager(DBManager):
             separation_sep = warn_sep
             warn_sep = True
         elif type(warn_sep ) in [float, int, np.float64]:
-            separation_sep = Angle(warn_sep, unit='rad')
-            warn_sep = True
+            if warn_sep > 0:
+                separation_sep = Angle(warn_sep, unit='rad')
+                warn_sep = True
+            else:
+                warn_sep = False
         elif warn_sep:
             raise ValueError(
                     '`warn_sep` must be astropy.coordinates.Angle or float.')
+
+        if not isinstance(n_batch, int) or n_batch < 1:
+            raise ValueError("'n_batch' must be integer > 0.")
 
         # warn about repetitions:
         if warn_rep:
@@ -2136,7 +2175,7 @@ class GuidestarManager(DBManager):
                     field_ids, ras, decs, separation_sep)
 
         # add to database:
-        self._add_guidestar(field_ids, ras, decs)
+        self._add_guidestar(field_ids, ras, decs, n_batch=n_batch)
 
         # warn about fields without guidestars:
         if warn_missing:
@@ -2144,7 +2183,7 @@ class GuidestarManager(DBManager):
 
     #--------------------------------------------------------------------------
     def get_guidestars(self, field_id=None, active=True):
-        """Get guide stars from database.
+        """Get guidestars from database.
 
         Parameters
         ----------
@@ -2492,7 +2531,7 @@ class ObservationManager(DBManager):
     #--------------------------------------------------------------------------
     def add_observations(
             self, exposure, repetitions, filter_name, field_id=None,
-            telescope=None):
+            telescope=None, check_for_duplicates=True, n_batch=1000):
         """Add observation to database.
 
         Parameters
@@ -2511,6 +2550,16 @@ class ObservationManager(DBManager):
             only to those fields that are associated to the specified
             telescope. Otherwise, observations are added to all active
             fields. The default is None.
+        check_for_duplicates, optional
+            If True, before adding any new observation it is checked whether an
+            active observation with the same parameters exists in the database.
+            If that is the case, the user us asked whether or not to add the
+            new observation anyway. This option may significantly increase the
+            time to run this method. To skip the checks, this option should be
+            set to False. The default is True.
+        n_batch : int, optinal
+            Add observations in batches of this size to the data base. The
+            default is 1000.
 
         Returns
         -------
@@ -2577,47 +2626,64 @@ class ObservationManager(DBManager):
         skip_active = False
         skip_inactive = False
         filter_ids = {}
-        data = []
 
-        # prepare entries for adding:
-        for field, exp, rep, filt in zip(
-                field_id, exposure, repetitions, filter_name):
+        n_obs = len(field_id)
+        n_iter = ceil(n_obs / n_batch)
 
-            # check if filter exists:
-            if filt not in filter_ids.keys():
-                filter_id = self.get_filter_id(filt)
-
-                # stop, if the filter does not exist and is not added:
-                if filter_id is False:
-                    print("Filter was not added to database. No " \
-                          "observations are added either.")
-                    return False
-
-                filter_ids[filt] = filter_id
-
-            # check if observation entry exists:
-            add, reactivate_all, add_all, skip_active, skip_inactive = \
-                    self._check_for_duplicates(
-                        field, exp, rep, filt, reactivate_all, add_all,
-                        skip_active, skip_inactive)
-
-            # add to data:
-            if add:
-                data.append((field, exp, rep, filter_ids[filt], False, False,
-                             True))
-
-        # add to data base:
         with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                INSERT INTO Observations (
-                    field_id, exposure, repetitions, filter_id, done,
-                    scheduled, active)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
-                """
-            self._query(connection, query, many=data, commit=True)
+            # iterate through batches:
+            for i in range(n_iter):
+                j = i * n_batch
+                k = (i + 1) * n_batch
+                print(
+                    '\rAdding observations {0}-{1} of {2} ({3:.1f}%)..'.format(
+                            j, k-1 if k <= n_obs else n_obs, n_obs,
+                            i*100./n_iter),
+                    end='')
 
-        n_obs = len(data)
-        print(f"{n_obs} observation(s) added to data base.")
+                data = []
+
+                # prepare entries for adding:
+                for field, exp, rep, filt in zip(
+                        field_id[j:k], exposure[j:k], repetitions[j:k],
+                        filter_name[j:k]):
+
+                    # check if filter exists:
+                    if filt not in filter_ids.keys():
+                        filter_id = self.get_filter_id(filt)
+
+                        # stop, if the filter does not exist and is not added:
+                        if filter_id is False:
+                            print("Filter was not added to database. No " \
+                                  "observations are added either.")
+                            return False
+
+                        filter_ids[filt] = filter_id
+
+                    # check if observation entry exists:
+                    if check_for_duplicates:
+                        add, reactivate_all, add_all, skip_active, \
+                        skip_inactive = self._check_for_duplicates(
+                                    field, exp, rep, filt, reactivate_all,
+                                    add_all, skip_active, skip_inactive)
+                    else:
+                        add = True
+
+                    # add to data:
+                    if add:
+                        data.append((field, exp, rep, filter_ids[filt], False,
+                                     False, True))
+
+                # add to data base:
+                query = """\
+                    INSERT INTO Observations (
+                        field_id, exposure, repetitions, filter_id, done,
+                        scheduled, active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?);
+                    """
+                self._query(connection, query, many=data, commit=True)
+
+        print(f"\r{n_obs} observation(s) added to data base.                 ")
 
     #--------------------------------------------------------------------------
     def get_filter_id(self, filter_name):
@@ -4073,7 +4139,7 @@ class DBCreator(DBManager):
     #--------------------------------------------------------------------------
     def add_guidestars(
             self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
-            warn_sep=0):
+            warn_sep=0, n_batch=1000):
         """Add new guidestar(s) to the database.
 
         Parameters
@@ -4098,6 +4164,9 @@ class DBCreator(DBManager):
             about new guidestars that may be too far off from the corresponding
             field center. The value in `warn_sep` is the largest separation
             allowed. A float is interpreted as angle in rad. The default is 0.
+        n_batch : int, optinal
+            Add guidestars in batches of this size to the data base. The
+            default is 1000.
 
         Returns
         -------
@@ -4107,12 +4176,12 @@ class DBCreator(DBManager):
         manager = GuidestarManager(self.db_file)
         manager.add_guidestars(
                 field_ids, ra, dec, warn_missing=warn_missing,
-                warn_rep=warn_rep, warn_sep=warn_sep)
+                warn_rep=warn_rep, warn_sep=warn_sep, n_batch=n_batch)
 
     #--------------------------------------------------------------------------
     def add_observations(
             self, exposure, repetitions, filter_name, field_id=None,
-            telescope=None):
+            telescope=None, check_for_duplicates=True, n_batch=1000):
         """Add observation to database.
 
         Parameters
@@ -4131,6 +4200,16 @@ class DBCreator(DBManager):
             only to those fields that are associated to the specified
             telescope. Otherwise, observations are added to all active
             fields. The default is None.
+        check_for_duplicates, optional
+            If True, before adding any new observation it is checked whether an
+            active observation with the same parameters exists in the database.
+            If that is the case, the user us asked whether or not to add the
+            new observation anyway. This option may significantly increase the
+            time to run this method. To skip the checks, this option should be
+            set to False. The default is True.
+        n_batch : int, optinal
+            Add observations in batches of this size to the data base. The
+            default is 1000.
 
         Returns
         -------
@@ -4140,6 +4219,7 @@ class DBCreator(DBManager):
         manager = ObservationManager(self.db_file)
         manager.add_observations(
                 exposure, repetitions, filter_name, field_id=field_id,
-                telescope=telescope)
+                telescope=telescope, check_for_duplicates=check_for_duplicates,
+                n_batch=n_batch)
 
 #==============================================================================
