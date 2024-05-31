@@ -2007,7 +2007,7 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def _get_observable_fields_by_night(
-            self, date, telescope, observed=None, pending=None,
+            self, date, telescope=None, observed=None, pending=None,
             active=True):
         """Get fields observable during a given night, given specific selection
         criteria.
@@ -2058,47 +2058,80 @@ class SurveyPlanner:
         else:
             raise ValueError('`telescope` must be string or None.')
 
+        # warn user if time was set:
+        if date.iso[11:] != '00:00:00.000':
+            print("WARNING: For argument `observable_night` provide " \
+                  "date only. Time information is truncated. To get " \
+                  "fields observable at specific time use the " \
+                  "`observable_time` argument.")
+
         # truncate time information from date:
         date = Time(date.iso[:10])
+
+        fields = []
 
         # iterate through telescopes:
         for telescope_name in telescopes:
             # get local noon of current and next day in UTC:
-            telescope = telescope_manager.get_telescopes(telescope_name)
+            telescope = telescope_manager.get_telescopes(telescope_name)[0]
             utc_offset = telescope['utc_offset'] * u.h
             noon_current = date + 12 * u.h - utc_offset
             noon_next = date + 36 * u.h - utc_offset
             # NOTE: ignoring daylight saving time
 
+            # query fields:
+            fields += field_manager.get_fields(
+                    telescope=telescope_name, observed=observed,
+                    pending=pending,
+                    observable_between=(noon_current.iso, noon_next.iso),
+                    active=active)
 
-
-
-
-
-        # iterate through fields:
-        for __, __, field in db.iter_fields(
-                telescope=telescope_name, observed=observed,
-                pending=pending, active=active):
-            field_id = field[0]
-            obs_windows = db.get_obs_windows_from_to(
-                    field_id, noon_current, noon_next)
-
-            if len(obs_windows) == 0:
-                continue
-
-            field = self._dict_to_field(field)
-            obs_windows = self._tuples_to_obs_windows(obs_windows)
-            field.add_obs_window(obs_windows)
-            date = night + 1. * u.d - utc_offset
-            self._set_field_status(
-                    field, date, days_before=3, days_after=7)
-
-            yield field
+        return fields
 
     #--------------------------------------------------------------------------
-    def _get_observable_fields_by_datetime(self):
-        # TODO
-        raise NotImplementedError()
+    def _get_observable_fields_by_datetime(
+            self, date, telescope=None, observed=None, pending=None,
+            active=True):
+        """Get fields observable during a given night, given specific selection
+        criteria.
+
+        Parameters
+        ----------
+        date : astropy.time.Time
+            Date of the night start. Time information is truncated.
+        telescope : str, optional
+            If specified, only fields associated with this telescope are
+            returned. The default is None.
+        observed : bool or None, optional
+            If True, iterate only through fields that have been observed at
+            least once. If False, iterate only through fields that have never
+            been observed. If None, iterate through fields irregardless of
+            whether they have  been observed or not. The default is None.
+        pending : bool or None, optional
+            If True, iterate only through fields that have pending observations
+            associated. If False, only iterate through fields that have no
+            pending observations associated. If None, iterate through fields
+            irregardless of whether they have pending observations associated
+            or not. The default is None.
+        active : bool or None, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through fields active or
+            not. The default is True.
+
+        Returns
+        ------
+        fields : list of dict
+            Each list item is a dict with the field parameters.
+        """
+
+        # database connections:
+        field_manager = FieldManager(self.dbname)
+
+        fields = field_manager.get_fields(
+                telescope=telescope, observed=observed, pending=pending,
+                observable_time=date.iso, active=active)
+
+        return fields
 
     #--------------------------------------------------------------------------
     def _get_fields(
@@ -2179,6 +2212,12 @@ class SurveyPlanner:
             fields are returned. If None, active and deactivated fields are
             returned. The default is True.
 
+        Raises
+        ------
+        ValueError
+            Raised, if `observable_night` is neither astropy.time.Time nor str.
+            Raised, if `observable_time` is neither astropy.time.Time nor str.
+
         Returns
         -------
         fields : list of dict
@@ -2188,11 +2227,13 @@ class SurveyPlanner:
         # get fields observable during a specific night:
         if observable_night is not None:
             # check input:
-            if observable_night.iso[11:] != '00:00:00.000':
-                print("WARNING: For argument `observable_night` provide " \
-                      "date only. Time information is truncated. To get " \
-                      "fields observable at specific time use the " \
-                      "`observable_time` argument.")
+            if isinstance(observable_night, Time):
+                pass
+            elif isinstance(observable_night, str):
+                observable_night = Time(observable_night)
+            else:
+                raise ValueError(
+                        "`observable_night` must be astropy.time.Time or str.")
 
             # get fields:
             fields = self._get_observable_fields_by_night(
@@ -2201,6 +2242,16 @@ class SurveyPlanner:
 
         # get fields observable at a specific time:
         elif observable_time is not None:
+            # check input:
+            if isinstance(observable_time, Time):
+                pass
+            elif isinstance(observable_time, str):
+                observable_time = Time(observable_time)
+            else:
+                raise ValueError(
+                        "`observable_time` must be astropy.time.Time or str.")
+
+            # get fields:
             fields = self._get_observable_fields_by_datetime(
                     observable_time, telescope=telescope, observed=observed,
                     pending=pending, active=active)
@@ -2212,297 +2263,5 @@ class SurveyPlanner:
                     active=active)
 
         return fields
-
-#==============================================================================
-
-class Prioritizer:
-    """A class to assign priorities to a list of fields.
-    """
-
-    #--------------------------------------------------------------------------
-    def __init__(self, surveyplanner):
-        """Create Prioratizer instance.
-
-        Parameters
-        ----------
-        surveyplanner : SurveyPlanner
-            The SurveyPlanner instance this Prioratizer is used by.
-
-        Returns
-        -------
-        None
-        """
-
-        self.surveyplanner = surveyplanner
-
-    #--------------------------------------------------------------------------
-    def _prioritize_by_sky_coverage(
-            self, fields, radius, telescope=None, normalize=False):
-        """Assign priority based on sky coverage.
-
-        Parameters
-        ----------
-        fields : list of Field
-            The fields that a priority is assigned to.
-        radius : astropy.units.Quantity
-            Radius in which to count field neighbors. Needs to be a Quantity
-            with unit 'rad' or 'deg'.
-        telescope : str, optional
-            Only fields associated with this telescope are taken into
-            consideration. If None, all fields are considered irregardless of
-            the associated telescope.
-        normalize : bool, optional
-            If True, all priorities are scaled such that the highest priority
-            has a value of 1.
-
-        Returns
-        -------
-        priority : numpy.ndarray
-            The priorities assigned to the input fields.
-
-        Notes
-        -----
-        The main idea is that a field that is surrounded by many finished
-        fields will get higher priority than a field with fewer finished,
-        neighboring fields. This is implemented in the variable `coverage0`.
-        However, a field with fewer neighbors (e.g. near the declination limit)
-        should get the same priority as a field with more neighbors if both
-        have no neighbors finished. This is implemented in the variable
-        `coverage1`. A weighting between two approaches is applied, such that
-        the first approach strongly applies to fields that have a strong impact
-        on finishing the neighborhood and the second approach is more dominant
-        when only we neighboring fields have been observed yet.
-        """
-
-        field_ids = [field.id for field in fields]
-
-        # count all neighboring fields for each given field:
-        count_all = self.surveyplanner.count_neighbors(
-                radius, field_ids, telescope=telescope)
-        count_all = np.array(count_all)
-
-        # count finished neighboring fields for each given field:
-        count_finished = self.surveyplanner.count_neighbors(
-                radius, field_ids, pending=False, telescope=telescope)
-        count_finished = np.array(count_finished)
-
-        # calculate priority:
-        count_all_max = count_all.max()
-        coverage0 = (count_finished + 1) / (count_all + 1)
-        coverage1 = (count_finished + 1) / (count_all_max + 1)
-        weight0 = count_finished / count_all
-        weight1 = 1. - weight0
-        priority = coverage0 * weight0 + coverage1 * weight1
-
-        # normalize:
-        if normalize:
-            priority = priority / priority.max()
-
-        return priority
-
-    #--------------------------------------------------------------------------
-    def _prioritize_by_field_status(
-            self, fields, rising=False, plateauing=False, setting=False):
-        """Prioratize fields by status of observability.
-
-        Parameters
-        ----------
-        fields : ist of Field
-            The fields that a priority is assigned to.
-        rising : bool, optional
-            If True, prioritize a field if it is rising. The default is False.
-        plateauing : bool, optional
-            If True, prioritize a field if it is plateauing. The default is
-            False.
-        setting : bool, optional
-            If True, prioritize a field if it is setting. The default is False.
-
-        Returns
-        -------
-        priority : numpy.ndarray
-            The priorities assigned to the input fields.
-
-        Notes
-        -----
-        This prioritization just returns 0. or 1..
-
-        The field status IDs are the following:
-        rising: 1
-        plateauing: 2
-        setting: 3
-        """
-
-        priority = np.zeros(len(fields))
-
-        for i, field in enumerate(fields):
-            if rising and field.status == 1:
-                priority[i] = 1.
-            if plateauing and field.status == 2:
-                priority[i] = 1.
-            if setting and field.status == 3:
-                priority[i] = 1.
-
-        return priority
-
-    #--------------------------------------------------------------------------
-    def _add_priorities_to_fields(self, priorities, fields):
-        """Add priority to each field.
-
-        Parameters
-        ----------
-        priorities : numpy.ndarray
-            The priority corresponding to each field.
-        fields : list of Field
-            The fields that the priorities correspond to and should be added
-            to.
-
-        Returns
-        -------
-        fields : list of Field
-            The same list of Field instances, now with priorities stored.
-        """
-
-        for priority, field in zip(priorities, fields):
-            field.set_priority(priority)
-
-        return fields
-
-    #--------------------------------------------------------------------------
-    def prioritize(
-            self, fields, weight_coverage=0., weight_rising=0.,
-            weight_plateauing=0., weight_setting=0., normalize=False,
-            coverage_radius=None, coverage_telescope=None,
-            coverage_normalize=False, return_priorities=False):
-        """Assign a priority to each field.
-
-        Parameters
-        ----------
-        fields : ist of Field
-            The fields that a priority is assigned to.
-        weight_coverage : float or int, optional
-            Weight assigned to the sky coverage priorities. The default is 0..
-        weight_rising : float or int, optional
-            Weight assigned to the rising fields. The default is 0..
-        weight_plateauing : float or int, optional
-            Weight assigned to the plateauing fields. The default is 0..
-        weight_setting : float or int, optional
-            Weight assigned to the setting fields. The default is 0..
-        normalize : bool, optional
-            If True, the final priorities after weighting are normalized to the
-            interval [0, 1]. The default is False.
-        coverage_radius : astropy.units.Quantity
-            Radius in which to count field neighbors. Needs to be a Quantity
-            with unit 'rad' or 'deg'. Required if `weight_coverage` is given.
-        coverage_telescope : str, optional
-            Only fields associated with this telescope are taken into
-            consideration for calculation of the sky coverage. If None, all
-            fields are considered irregardless of the associated telescope.
-            Only has an effect, when `weight_coverage` is given.
-        coverage_normalize : bool, optional
-            If True, priorities are scaled such that the highest priority
-            has a value of 1.
-        return_priorities : bool, optional
-            If True, the priorities based on the individual criteria and the
-            final, joint priorities are returned as well as a dict. Otherwise,
-            just fields with priorities added are returned. The default is
-            False.
-
-        Raises
-        ------
-        ValueError
-            Raised if `weight_coverage` is given for a prioritization based on
-            the sky coverage, but `coverage_radius` is not given, which is
-            required to calculate the coverage.
-        ValueError
-            Raised if any of the weights `weight_*` is negative or not integer
-            or float.
-
-        Returns
-        -------
-        fields : list of Field
-            The input fields now with priorities added.
-        optional:
-        priority : dict of numpy.ndarray
-            The priorities based on the individual criteria and the final,
-            joint priorities. Only returned if `return_all=True`.
-        """
-
-        # check input:
-        if weight_coverage and coverage_radius is None:
-            raise ValueError(
-                    "When 'weight_coverage' is non-zero, 'coverage_radius' " \
-                    "has to be set.")
-
-        if type(weight_coverage) not in [float, int] or \
-                weight_coverage < 0:
-            raise ValueError("'weight_coverage' must be positive float.")
-
-        if type(weight_rising) not in [float, int] or weight_rising < 0:
-            raise ValueError("'weight_rising' must be positive float.")
-
-        if type(weight_plateauing) not in [float, int] or \
-                weight_plateauing < 0:
-            raise ValueError("'weight_plateauing' must be positive float.")
-
-        if type(weight_setting) not in [float, int] or \
-                weight_setting < 0:
-            raise ValueError("'weight_setting' must be positive float.")
-
-        # get priorities by individual criteria:
-        priorities = []
-        weights = []
-        priorities_dict = {}
-
-        if weight_coverage:
-            priority = self._prioritize_by_sky_coverage(
-                    fields, coverage_radius,
-                    telescope=coverage_telescope,
-                    normalize=coverage_normalize)
-            priorities.append(priority)
-            weights.append(weight_coverage)
-            priorities_dict['coverage'] = {
-                    'weight': weight_coverage, 'priority': priority}
-
-        if weight_rising:
-            priority = self._prioritize_by_field_status(
-                    fields, rising=True, plateauing=False, setting=False)
-            priorities.append(priority)
-            weights.append(weight_rising)
-            priorities_dict['rising'] = {
-                    'weight': weight_rising, 'priority': priority}
-
-        if weight_plateauing:
-            priority = self._prioritize_by_field_status(
-                    fields, rising=False, plateauing=True, setting=False)
-            priorities.append(priority)
-            weights.append(weight_plateauing)
-            priorities_dict['plateauing'] = {
-                    'weight': weight_plateauing, 'priority': priority}
-
-        if weight_setting:
-            priority = self._prioritize_by_field_status(
-                    fields, rising=False, plateauing=False, setting=True)
-            priorities.append(priority)
-            weights.append(weight_setting)
-            priorities_dict['setting'] = {
-                    'weight': weight_setting, 'priority': priority}
-
-        # joint priority:
-        priority = sum([w * p for w, p in zip(weights, priorities)])
-        priority /= sum(weights)
-
-        # normalize:
-        if normalize:
-            priority = priority / priority.max()
-
-
-        fields = self._add_priorities_to_fields(priority, fields)
-        priorities_dict['joint'] = priority
-
-        if return_priorities:
-            return fields, priorities_dict
-
-        return priority
-
 
 #==============================================================================

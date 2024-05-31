@@ -1124,7 +1124,7 @@ class TelescopeManager(DBManager):
                 """
             results = self._query(connection, query).fetchall()
 
-        telescope_names = [result['telescope_name'] for result in results]
+        telescope_names = [result['name'] for result in results]
 
         return telescope_names
 
