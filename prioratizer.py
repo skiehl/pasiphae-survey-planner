@@ -197,6 +197,12 @@ class PrioritizerSkyCoverage(Prioritizer):
             field in the input field list.
         self.label : str
             The name of this prioritizer.
+
+        Notes
+        -----
+        Assign a higher priority to fields in a neighborhood of fields that is
+        closer to being finished. The size of the neighborhood depends on the
+        `radius` set at class instanciation.
         """
 
         # get coordinates and number of pending observations for all active
@@ -227,6 +233,77 @@ class PrioritizerSkyCoverage(Prioritizer):
 
         if self.normalize:
             priority /= priority.max()
+
+        return priority, self.label
+
+#==============================================================================
+
+class PrioritizerFieldStatus(Prioritizer):
+    """Assign priorities to fields based on the field observability status.
+    """
+
+    label = 'FieldStatus'
+
+    #--------------------------------------------------------------------------
+    def __init__(self, rising=False, plateauing=False, setting=False):
+        """Create PrioratizerSkyCoverage instance.
+
+        Parameters
+        ----------
+        rising : bool, optional
+            If True, prioritize a field if it is rising. The default is False.
+        plateauing : bool, optional
+            If True, prioritize a field if it is plateauing. The default is
+            False.
+        setting : bool, optional
+            If True, prioritize a field if it is setting. The default is False.
+
+        Returns
+        -------
+        None
+        """
+
+        self.rising = bool(rising)
+        self.plateauing = bool(plateauing)
+        self.setting = bool(setting)
+
+    #--------------------------------------------------------------------------
+    def prioratize(self, fields):
+        """Assign priorities to fields.
+
+        Arguments
+        ---------
+        fields : list of dict
+            List of field dictionaries as returned by
+            surveyplanner.Surveyplanner.get_fields().
+
+        Returns
+        -------
+        priority : numpy.ndarray
+            Each entry is a priority of either 0 or 1 corresponding to one
+            field in the input field list.
+        self.label : str
+            The name of this prioritizer.
+
+        Notes
+        -----
+        Assign a priority of 1 to fields that are rising and/or plateauing
+        and/or setting, depending on the parameters set at class instanciation.
+        Otherwise, the priority is 0.
+        """
+
+        priority = np.zeros(len(fields))
+
+        # iterate through fields:
+        for i, field in enumerate(fields):
+            if self.rising and field['status'] == 'rising':
+                priority[i] = 1
+
+            if self.plateauing and field['status'] == 'plateauing':
+                priority[i] = 1
+
+            if self.setting and field['status'] == 'setting':
+                priority[i] = 1
 
         return priority, self.label
 
