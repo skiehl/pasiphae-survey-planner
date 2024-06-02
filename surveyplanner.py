@@ -15,6 +15,7 @@ from textwrap import dedent
 
 import constraints as c
 from db import FieldManager, ObservabilityManager, TelescopeManager
+from prioritizer import Prioritizer
 from utilities import true_blocks
 
 __author__ = "Sebastian Kiehlmann"
@@ -2004,6 +2005,8 @@ class SurveyPlanner:
         """
 
         self.dbname = dbname
+        self.prioritizers = {}
+        self.weights = {}
 
     #--------------------------------------------------------------------------
     def _get_observable_fields_by_night(
@@ -2263,5 +2266,49 @@ class SurveyPlanner:
                     active=active)
 
         return fields
+
+    #--------------------------------------------------------------------------
+    def set_prioritizer(self, *prioritizers, weights=None):
+        # TODO: docstring
+
+        print("Set prioritizer(s)..")
+        self.prioritizers = {}
+        self.weights = {}
+
+        # check weights:
+        if weights is None:
+            weights = np.ones(len(prioritizers))
+
+        elif weights is not None:
+            if type(weights) not in [list, tuple]:
+                raise ValueError("`weights` must be list or tuple.")
+
+            if len(prioritizers) != len(weights):
+                raise ValueError(
+                        "Length of `weights` does not match length of " \
+                        "`prioratizers`.")
+
+        else:
+            raise ValueError("`weights` must be list, tuple, or None.")
+
+        for weight in weights:
+            if type(weight) not in [float, int] or weight <= 0:
+                raise ValueError("All `weights` must be float (or int) >0.")
+
+        # normalize weights:
+        weights = np.array(weights, dtype=float)
+        weights /= np.sum(weights)
+
+        # iterate through prioritizers:
+        for i, prioritizer in enumerate(prioritizers):
+            # check input:
+            if not isinstance(prioritizer, Prioritizer):
+                raise ValueError(
+                        "`prioritizer` must be a Prioritizer class instance.")
+
+            # store prioritizer and weight:
+            self.prioritizers[prioritizer.label] = prioritizer
+            self.weights[prioritizer.label] = weights[i]
+            print(f"Added prioritizer {prioritizer.label}.")
 
 #==============================================================================
