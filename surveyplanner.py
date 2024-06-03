@@ -2269,7 +2269,33 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def set_prioritizer(self, *prioritizers, weights=None):
-        # TODO: docstring
+        """Set prioritizers.
+
+        Parameters
+        ----------
+        *prioritizers : Prioritizer-instance
+            One or multiple prioritizers (defined in prioritizer.py) that will
+            assign priorities to fields.
+        weights : list of floats or None, optional
+            Weights are only relevant if multiple prioritizers are set. If no
+            weights are given, all priorities will be weighted equally. If
+            weights are given, priorities are weighted accordingly and then
+            summed. The same number of weights must be provided as number of
+            prioritizers. The default is None.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `weights` is neither list, tuple, nor None.
+            Raised, if `weights` does not match the number of prioritizers.
+            Raised, if the elements in `weights` are not floats larger than 0.
+            Raised, if any values given to prioritizers are not
+            Prioritizer-instances.
+
+        Returns
+        -------
+        None
+        """
 
         print("Set prioritizer(s)..")
         self.prioritizers = {}
