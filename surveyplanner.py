@@ -2178,6 +2178,44 @@ class SurveyPlanner:
         return fields
 
     #--------------------------------------------------------------------------
+    def _get_priorities(self, fields):
+        """Assign priorities to fiels.
+
+        Parameters
+        ----------
+        fields : list of dict
+            List of field dictionaries as returned by
+            surveyplanner.Surveyplanner.get_fields().
+
+        Returns
+        -------
+        None
+        """
+
+        priorities = {}
+
+        # iterate through prioritizers:
+        for label, prioritizer in self.prioritizers.items():
+            print(f'  {label}.. ', end='')
+            priorities[label], __ = prioritizer.prioratize(fields)
+            print('done')
+
+        priorities_joint = [
+                priorities[label] * self.weights[label] \
+                for label in self.prioritizers.keys()]
+        priorities_joint = np.sum(priorities_joint, axis=0)
+        priorities['Joint'] = priorities_joint
+
+        # add priorities to fields:
+        print('Add priorities to fields..')
+        labels = priorities.keys()
+
+        # iterate through fields:
+        for i, field in enumerate(fields):
+            for label in labels:
+                field[f'priority{label}'] = priorities[label][i]
+
+    #--------------------------------------------------------------------------
     def get_fields(
             self, observable_night=None, observable_time=None, telescope=None,
             observed=None, pending=None, active=True):
@@ -2185,13 +2223,13 @@ class SurveyPlanner:
 
         Parameters
         ----------
-        observable_night : astropy.time.Time, optional
+        observable_night : astropy.time.Time or str, optional
             If a date is given, only fields are returned that are observable
             during the night that starts on the specified date. Time
             information is truncated. Either set this argument or
-            `observable_time` If this argument is set, `observable_time` is not
-            used. The default is None.
-        observable_time : astropy.time.Time, optional
+            `observable_time`. If this argument is set, `observable_time` is
+            not used. The default is None.
+        observable_time : astropy.time.Time or str, optional
             If a date and time is given, only fields are returned that are
             observable at that specific time. Either set this argument or
             `observable_night`. If `observable_night` is given, this argument
@@ -2285,12 +2323,14 @@ class SurveyPlanner:
 
         Raises
         ------
-        ValueError
+        TypeError
             Raised, if `weights` is neither list, tuple, nor None.
-            Raised, if `weights` does not match the number of prioritizers.
-            Raised, if the elements in `weights` are not floats larger than 0.
             Raised, if any values given to prioritizers are not
             Prioritizer-instances.
+        ValueError
+            Raised, if `weights` does not match the number of prioritizers.
+            Raised, if the elements in `weights` are not floats larger than 0.
+
 
         Returns
         -------
@@ -2307,7 +2347,7 @@ class SurveyPlanner:
 
         elif weights is not None:
             if type(weights) not in [list, tuple]:
-                raise ValueError("`weights` must be list or tuple.")
+                raise TypeError("`weights` must be list or tuple.")
 
             if len(prioritizers) != len(weights):
                 raise ValueError(
@@ -2329,12 +2369,54 @@ class SurveyPlanner:
         for i, prioritizer in enumerate(prioritizers):
             # check input:
             if not isinstance(prioritizer, Prioritizer):
-                raise ValueError(
+                raise TypeError(
                         "`prioritizer` must be a Prioritizer class instance.")
 
             # store prioritizer and weight:
             self.prioritizers[prioritizer.label] = prioritizer
             self.weights[prioritizer.label] = weights[i]
             print(f"Added prioritizer {prioritizer.label}.")
+
+    #--------------------------------------------------------------------------
+    def plan(self, night, telescope):
+        """Identify and prioritize observable fields with pending observations
+        for a specific night and telescope.
+
+        Parameters
+        ----------
+        night : astropy.time.Time or str
+            The date on which the night starts for which field observations
+            should be planned.
+        telescope : str
+            Name of the telescope for which field observations should be
+            planned.
+
+        Raises
+        ------
+        TypeError
+            Raise, if no prioritizer(s) have been set yet.
+
+        Returns
+        -------
+        None
+        """
+
+        # check if prioritizers have been set:
+        if not len(self.prioritizers):
+            raise TypeError(
+                    "No prioritizer(s) set yet. Use `set_prioritizer()` first."
+                    )
+
+        # get active, observable, pending fields:
+        print('Query observable, pending fields..')
+        fields = self.get_fields(
+                observable_night=night, telescope=telescope, pending=True,
+                active=True)
+
+        # prioritize:
+        print('Get priorities..')
+        self._get_priorities(fields)
+
+        self.fields = fields
 
 #==============================================================================
