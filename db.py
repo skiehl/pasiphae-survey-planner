@@ -1438,6 +1438,7 @@ class FieldManager(DBManager):
             print(f'\r{n_fields} fields added to database.                   ')
 
     #--------------------------------------------------------------------------
+    '''
     def get_fields(
             self, telescope=None, observed=None, pending=None,
             observable_between=None, observable_time=None, active=True,
@@ -1531,18 +1532,12 @@ class FieldManager(DBManager):
                 	SELECT *
                 	FROM Observable
                 	WHERE (
-                		(date_start >= "{0}"
-                		AND date_start <= "{1}")
-                		OR
-                		(date_stop >= "{0}"
-                		AND date_stop <= "{1}")
-                		OR
-                		(date_start <= "{0}"
-                		AND date_stop >= "{1}")
+                		date_start <= "{0}"
+                		AND date_stop >= "{1}"
                 		)
                 	) AS w
                 ON f.field_id = w.field_id
-                """.format(observable_between[0], observable_between[1])
+                """.format(observable_between[1], observable_between[0])
 
         # set query condition for observable at a specific time:
         elif observable_time:
@@ -1586,6 +1581,157 @@ class FieldManager(DBManager):
                         condition_observed, condition_pending,
                         condition_obswindow)
             results = self._query(connection, query).fetchall()
+
+        return results
+    '''
+
+    #--------------------------------------------------------------------------
+    def get_fields(
+            self, telescope=None, observed=None, pending=None,
+            observable_between=None, observable_time=None, active=True,
+            needs_obs_windows=None, init_obs_windows=False):
+        """Get fields from the database, given various selection criteria.
+
+        Parameters
+        ----------
+        telescope : str, optional
+            Telescope name. If set, only query fields associated with this
+            telescope. If None, query fields for all telescopes. The
+            default is None.
+        observed : bool, optional
+            If True, only query fields that have been observed at least once.
+            If False, only query fields that have never been observed. In None,
+            query fields independend of the observation status. The default is
+            None.
+        pending : bool, optional
+            If True, only query fields that have pending observations
+            associated. If False, only query fields that have no pending
+            observations associated. If None, query fields independent of
+            whether observations are pending or not. The default is None.
+        observable_between : tuple of str or None, optional
+            Provide two strings that encode date+time. Then, only fields are
+            returned that are observable (at least for some time) between the
+            two specified times. Either set this argument or
+            `observable_time`. If this argument is set, `observable_time` is
+            not used. The default is None.
+        observable_time : str or None, optional
+            Provide a string that encodes a date+time. Then, only fields are
+            returned that are observable at that specific time. Either set this
+            argument or `observable_between`. If `observable_between` is given,
+            this argument is ignored. The default is None.
+        active : bool, optional
+            If True, only query active fields. If False, only query inactive
+            fields. If None, query fields independent of whether they are
+            active or not. The default is True.
+        needs_obs_window : float or None, optional
+            If JD is given, only fields are returned that need additional
+            observing window calculations up to this JD. The default is None.
+        init_obs_windows : bool, optional
+            If True, query field that do not have any observing windows stored
+            yet. The default is False.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `needs_obs_window` is set and `init_obs_windows=True`.
+            Only one option can be selected at a time.
+
+        Returns
+        -------
+        results : list of dict
+            Each list item is a dict with the field parameters.
+        """
+
+        # check input:
+        if needs_obs_windows is not None and init_obs_windows:
+            raise ValueError(
+                    'Either set `needs_obs_window` OR use '\
+                    '`init_obs_windows=True`.')
+
+        selection = ""
+        join = ""
+        condition = ""
+
+        # set query condition for observable between two dates:
+        if observable_between:
+            selection = ", o.date_start, o.date_stop, o.duration, o.status, " \
+                    "o.setting_duration"
+            join = """\
+                INNER JOIN Observable AS o
+                ON f.field_id = o.field_id
+                """
+            condition = """\
+                WHERE (
+                    o.date_start < '{0}'
+                    AND o.date_stop > '{1}')
+                """.format(observable_between[1], observable_between[0])
+
+        # set query condition for observable at a specific time:
+        elif observable_time:
+            selection = ", o.date_start, o.date_stop, o.duration, o.status, " \
+                    "o.setting_duration"
+            join = """\
+                INNER JOIN Observable AS o
+                ON f.field_id = o.field_id
+                """
+            condition = """\
+                WHERE (
+                    o.date_start <= '{0}'
+                    AND o.date_stop > '{0}')
+                """.format(observable_time)
+
+        # set query condition for observing window requirement:
+        elif needs_obs_windows:
+            condition = "WHERE jd_next < '{0}'".format(
+                    needs_obs_windows)
+        elif init_obs_windows:
+            condition = "WHERE jd_next IS NULL"
+
+        # query data base:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT f.field_id, f.fov, f.center_ra, f.center_dec, f.tilt,
+                    f.telescope, f.active, f.jd_first, f.jd_next, f.nobs_tot,
+                    f.nobs_done, f.nobs_pending {0}
+                FROM FieldsObs AS f
+                {1}
+                {2};
+                """.format(selection, join, condition)
+            results_temp = self._query(connection, query).fetchall()
+
+        # apply additional conditions:
+        # note: post-filtering in python is done, because including these
+        # conditions in the SQL query unproportionally blows up the runtime.
+        results = []
+
+        for __ in range(len(results_temp)):
+            keep = True
+            result = results_temp.pop(0)
+
+            # condition: telescope:
+            if telescope is None:
+                pass
+            elif telescope != result['telescope']:
+                keep = False
+
+            # condition: pending or not:
+            if pending is None:
+                pass
+            elif pending and result['nobs_pending'] == 0:
+                keep = False
+            elif not pending and result['nobs_pending'] > 0:
+                keep = False
+
+            # condition: active or not:
+            if active is None:
+                pass
+            elif active and not result['active']:
+                keep = False
+            elif not active and result['active']:
+                keep = False
+
+            if keep:
+                results.append(result)
 
         return results
 
@@ -1715,7 +1861,8 @@ class GuidestarManager(DBManager):
     """Database manager for guidestars."""
 
     #--------------------------------------------------------------------------
-    def _get_by_field_id(self, field_id, active=True):
+    def _get_by_field_id(
+            self, field_id, active=True, essential_columns_only=False):
         """Get guidestars for a specific field from database.
 
         Parameters
@@ -1727,6 +1874,9 @@ class GuidestarManager(DBManager):
             inactive guidestars are returned. If None, all guidestars are
             returned regardless of whether they are active or not. The default
             is True.
+        essential_columns_only : bool, optional
+            If True and field_id is not None, only the following columns are
+            queried: guidestar_id, ra, dec. Otherwise, all columns are queried.
 
         Returns
         -------
@@ -1735,6 +1885,12 @@ class GuidestarManager(DBManager):
             associated field ID, guidestar right ascension in rad, and
             guidestar declination in rad.
         """
+
+        # define queried columns:
+        if essential_columns_only:
+            columns = 'guidestar_id, ra, dec'
+        else:
+            columns = '*'
 
         # define SQL WHERE clause:
         if active is None:
@@ -1748,10 +1904,10 @@ class GuidestarManager(DBManager):
         # query:
         with SQLiteConnection(self.db_file) as connection:
             query = """\
-                SELECT *
+                SELECT {0}
                 FROM Guidestars
-                {0}
-                """.format(where_clause)
+                {1}
+                """.format(columns, where_clause)
             results = self._query(connection, query).fetchall()
 
         return results
@@ -2182,7 +2338,8 @@ class GuidestarManager(DBManager):
             self._warn_missing()
 
     #--------------------------------------------------------------------------
-    def get_guidestars(self, field_id=None, active=True):
+    def get_guidestars(
+            self, field_id=None, active=True, essential_columns_only=False):
         """Get guidestars from database.
 
         Parameters
@@ -2196,6 +2353,9 @@ class GuidestarManager(DBManager):
             inactive guidestars are returned. If None, all guidestars are
             returned regardless of whether they are active or not. The default
             is True.
+        essential_columns_only : bool, optional
+            If True and field_id is not None, only the following columns are
+            queried: guidestar_id, ra, dec. Otherwise, all columns are queried.
 
         Raises
         ------
@@ -2216,7 +2376,9 @@ class GuidestarManager(DBManager):
         """
 
         if isinstance(field_id, int):
-            results = self._get_by_field_id(field_id, active=active)
+            results = self._get_by_field_id(
+                    field_id, active=active,
+                    essential_columns_only=essential_columns_only)
         elif field_id is None:
            results = self._get_all(active=active)
         else:
@@ -2529,436 +2691,6 @@ class ObservationManager(DBManager):
         return add, reactivate_all, add_all, skip_active, skip_inactive
 
     #--------------------------------------------------------------------------
-    def add_observations(
-            self, exposure, repetitions, filter_name, field_id=None,
-            telescope=None, check_for_duplicates=True, n_batch=1000):
-        """Add observation to database.
-
-        Parameters
-        ----------
-        exposure : float or list of float
-            Exposure time in seconds.
-        repetitions : int or list of int
-            Number of repetitions.
-        filter_name : str or list of str
-            Filter name.
-        field_id : int or list of int, optional
-            ID(s) of the associated field(s). If None, the same observation is
-            added to all active fields. The default is None.
-        telescope : str, optional
-            If field_id is None, this argument can be used to add observations
-            only to those fields that are associated to the specified
-            telescope. Otherwise, observations are added to all active
-            fields. The default is None.
-        check_for_duplicates, optional
-            If True, before adding any new observation it is checked whether an
-            active observation with the same parameters exists in the database.
-            If that is the case, the user us asked whether or not to add the
-            new observation anyway. This option may significantly increase the
-            time to run this method. To skip the checks, this option should be
-            set to False. The default is True.
-        n_batch : int, optinal
-            Add observations in batches of this size to the data base. The
-            default is 1000.
-
-        Returns
-        -------
-        None
-
-        Notes
-        -----
-        This method uses `FieldManager()`. This method calls `get_filter_id()`,
-        `_check_for_duplicates()`, and `get_observations()`.
-        """
-
-        # prepare field IDs:
-        if field_id is None:
-            field_manager = FieldManager(self.db_file)
-            field_id = [field['field_id'] for field in
-                        field_manager.get_fields(
-                            telescope=telescope, active=True)]
-        elif isinstance(field_id, int):
-            field_id = [field_id]
-        elif isinstance(field_id, list):
-            pass
-        else:
-            raise ValueError(
-                    "'field_id' needs to be int, list of int, or None.")
-
-        n_fields = len(field_id)
-
-        # prepare exposures:
-        if type(exposure) in [float, int]:
-            exposure = float(exposure)
-            exposure = [exposure for __ in range(n_fields)]
-        elif isinstance(exposure, list):
-            if len(exposure) != n_fields:
-                raise ValueError(
-                        "'exposures' list need to be of the same length as " \
-                        "'field_id'.")
-        else:
-            raise ValueError("'exposure' needs to be float or list of floats.")
-
-        # prepare repetitions:
-        if isinstance(repetitions, int):
-            repetitions = [repetitions for __ in range(n_fields)]
-        elif isinstance(repetitions, list):
-            if len(repetitions) != n_fields:
-                raise ValueError(
-                        "'repetitions' list need to be of the same length " \
-                        "'as field_id'.")
-        else:
-            raise ValueError("'repetitions' needs to be int or list of int.")
-
-        # prepare filters:
-        if isinstance(filter_name, str):
-            filter_name = [filter_name for __ in range(n_fields)]
-        elif isinstance(filter_name, list):
-            if len(filter_name) != n_fields:
-                raise ValueError(
-                        "'filter_name' list need to be of the same length " \
-                        "'as field_id'.")
-        else:
-            raise ValueError("'filter_name' needs to be str or list of str.")
-
-        reactivate_all = False
-        add_all = False
-        skip_active = False
-        skip_inactive = False
-        filter_ids = {}
-
-        n_obs = len(field_id)
-        n_iter = ceil(n_obs / n_batch)
-
-        with SQLiteConnection(self.db_file) as connection:
-            # iterate through batches:
-            for i in range(n_iter):
-                j = i * n_batch
-                k = (i + 1) * n_batch
-                print(
-                    '\rAdding observations {0}-{1} of {2} ({3:.1f}%)..'.format(
-                            j, k-1 if k <= n_obs else n_obs, n_obs,
-                            i*100./n_iter),
-                    end='')
-
-                data = []
-
-                # prepare entries for adding:
-                for field, exp, rep, filt in zip(
-                        field_id[j:k], exposure[j:k], repetitions[j:k],
-                        filter_name[j:k]):
-
-                    # check if filter exists:
-                    if filt not in filter_ids.keys():
-                        filter_id = self.get_filter_id(filt)
-
-                        # stop, if the filter does not exist and is not added:
-                        if filter_id is False:
-                            print("Filter was not added to database. No " \
-                                  "observations are added either.")
-                            return False
-
-                        filter_ids[filt] = filter_id
-
-                    # check if observation entry exists:
-                    if check_for_duplicates:
-                        add, reactivate_all, add_all, skip_active, \
-                        skip_inactive = self._check_for_duplicates(
-                                    field, exp, rep, filt, reactivate_all,
-                                    add_all, skip_active, skip_inactive)
-                    else:
-                        add = True
-
-                    # add to data:
-                    if add:
-                        data.append((field, exp, rep, filter_ids[filt], False,
-                                     False, True))
-
-                # add to data base:
-                query = """\
-                    INSERT INTO Observations (
-                        field_id, exposure, repetitions, filter_id, done,
-                        scheduled, active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?);
-                    """
-                self._query(connection, query, many=data, commit=True)
-
-        print(f"\r{n_obs} observation(s) added to data base.                 ")
-
-    #--------------------------------------------------------------------------
-    def get_filter_id(self, filter_name):
-        """Get the filter ID by the filter name.
-
-        Parameters
-        ----------
-        filter_name : str
-            Filter name.
-
-        Returns
-        -------
-        filter_id : int
-            Filter ID.
-
-        Notes
-        -----
-        If the filter name does not exist in the database, the user is asked
-        whether or not to add it.
-        This method calls `_add_filter()`.
-        """
-
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                SELECT filter_id, filter
-                FROM Filters
-                WHERE filter='{0}';
-                """.format(filter_name)
-            result = self._query(connection, query).fetchone()
-
-        if not result:
-            userin = input(
-                    f"Filter '{filter_name} does not exist. Add it to data " \
-                    "base? (y/n)")
-
-            if userin.lower() in ['y', 'yes', 'make it so!']:
-                filter_id = self._add_filter(filter_name)
-            else:
-                filter_id = False
-
-        else:
-            filter_id = result['filter_id']
-
-        return filter_id
-
-    #--------------------------------------------------------------------------
-    def get_observations(
-            self, observation_id=None, field_id=None, exposure=None,
-            repetitions=None, filter_name=None, done=None, scheduled=None,
-            active=True):
-        """Query an observation from the database.
-
-        Parameters
-        ----------
-        observation_id : int or None, optional
-            If given, the observation with this ID is returned. All other
-            arguments are irrelevant and ignored. If None, use the other
-            arguments to specify which observations should be returned. The
-            default is None.
-        field_id : int or None, optional
-            ID of the associated field. The default is None.
-        exposure : float or None, optional
-            Exposure time in seconds. The default is None.
-        repetitions : int or None, optional
-            Number of repetitions. The default is None.
-        filter_name : str or None, optional
-            Filter name.
-        done : bool or None, optional
-            If True, only search for finished observations. If False, only
-            search for unfinished observations. If None, search for
-            observations regardless of whether they are finished or not. The
-            default is None.
-        scheduled : bool or None, optional
-            If True, only search for scheduled observations. If False, only
-            search for non-scheduled observations. If None, search for
-            observations regardless of whether they are scheduled or not. The
-            default is None.
-        done : bool or None, optional
-            If True, only search for finished observations. If False, only
-            search for observations not yet finished. If None, search for
-            observations regardless of whether they are finished or not. The
-            default is None.
-        scheduled : bool or None, optional
-            If True, only search for scheduled observations. If False, only
-            search for observations not scheduled. If None, search for
-            observations regardless of whether they are scheduled or not. The
-            default is None.
-        active : bool or None, optional
-            If True, only search for active observations. If False, only search
-            for inactive observations. If None, search for observations
-            regardless of whether they are active or not. The default is True.
-
-        Returns
-        -------
-        results : list of dict
-            Each list item is a dict with observation parameters. The list is
-            empty if no observation was found matching the criteria.
-        """
-
-        # define SQL WHERE clause, when observation ID is provided:
-        if observation_id is not None:
-            where_clause = f'WHERE observation_id = {observation_id}'
-
-        # define SQL WHERE conditions, when no observation ID is provided:
-        else:
-            where_clauses = []
-
-            if field_id is None:
-                pass
-            elif isinstance(field_id, int):
-                where_clause = f'field_id = {field_id}'
-                where_clauses.append(where_clause)
-            else:
-                raise ValueError("`field_id` must be int or None.")
-
-            if exposure is None:
-                pass
-            elif type(exposure) in [float, int]:
-                where_clause = f'exposure = {exposure}'
-                where_clauses.append(where_clause)
-            else:
-                raise ValueError("`exposure` must be float or None.")
-
-            if repetitions is None:
-                pass
-            elif isinstance(repetitions, int):
-                where_clause = f'repetitions = {repetitions}'
-                where_clauses.append(where_clause)
-            else:
-                raise ValueError("`repetitions` must be int or None.")
-
-            if filter_name is None:
-                pass
-            elif isinstance(filter_name, str):
-                where_clause = f"filter = '{filter_name}'"
-                where_clauses.append(where_clause)
-            else:
-                raise ValueError("`filter_name` must be str or None.")
-
-            if active is None:
-                pass
-            elif active:
-                where_clause = 'active = TRUE'
-                where_clauses.append(where_clause)
-            else:
-                where_clause = 'active = FALSE'
-                where_clauses.append(where_clause)
-
-            if done is None:
-                pass
-            elif done:
-                where_clause = 'done = TRUE'
-                where_clauses.append(where_clause)
-            else:
-                where_clause = 'done = FALSE'
-                where_clauses.append(where_clause)
-
-            if scheduled is None:
-                pass
-            elif scheduled:
-                where_clause = 'scheduled = TRUE'
-                where_clauses.append(where_clause)
-            else:
-                where_clause = 'scheduled = FALSE'
-                where_clauses.append(where_clause)
-
-            if where_clauses:
-                where_clause = ' AND '.join(where_clauses)
-                where_clause = f'WHERE ({where_clause})'
-            else:
-                where_clause = ''
-
-        # query:
-        with SQLiteConnection(self.db_file) as connection:
-            query = """\
-                SELECT observation_id, field_id, exposure, repetitions, filter,
-                    done, scheduled, active, date_done
-                FROM Observations AS o
-                LEFT JOIN Filters AS f
-                ON o.filter_id = f.filter_id
-                {0}
-                """.format(where_clause)
-            results = self._query(connection, query).fetchall()
-
-        return results
-
-    #--------------------------------------------------------------------------
-    def activate(self, observation_ids):
-        """Activate one or multiple observations.
-
-        Parameters
-        ----------
-        observation_ids : int
-            ID of the observation that should be set to active.
-
-        Raises
-        ------
-        ValueError
-            Raised, if `observation_id` is neither int nor list.
-
-        Returns
-        -------
-        None
-
-        Notes
-        -----
-        This method does not check if the observation(s) corresponding to the
-        given ID(s) are actually inactive, before being set to active.
-        """
-
-        if isinstance(observation_ids, int):
-            observation_ids = [observation_ids]
-        elif type(observation_ids) in [list, tuple]:
-            pass
-        else:
-            raise ValueError("`observation_ids` must be int or list.")
-
-        with SQLiteConnection(self.db_file) as connection:
-            for observation_id in observation_ids:
-                query = """\
-                    UPDATE Observations
-                    SET active = True
-                    WHERE observation_id = {0}
-                    """.format(observation_id)
-                self._query(connection, query, commit=False)
-
-            connection.commit()
-
-        print(f'Activated {len(observation_ids)} observation(s).')
-
-    #--------------------------------------------------------------------------
-    def deactivate(self, observation_ids):
-        """Deactivate one or multiple observations.
-
-        Parameters
-        ----------
-        observation_ids : int
-            ID of the observation that should be set to inactive.
-
-        Raises
-        ------
-        ValueError
-            Raised, if `observation_id` is neither int nor list.
-
-        Returns
-        -------
-        None
-
-        Notes
-        -----
-        This method does not check if the observation(s) corresponding to the
-        given ID(s) are actually active, before being set to inactive.
-        """
-
-        if isinstance(observation_ids, int):
-            observation_ids = [observation_ids]
-        elif type(observation_ids) in [list, tuple]:
-            pass
-        else:
-            raise ValueError("`observation_ids` must be int or list.")
-
-        with SQLiteConnection(self.db_file) as connection:
-            for observation_id in observation_ids:
-                query = """\
-                    UPDATE Observations
-                    SET active = FALSE
-                    WHERE observation_id = {0}
-                    """.format(observation_id)
-                self._query(connection, query, commit=False)
-
-            connection.commit()
-
-        print(f'Deactivated {len(observation_ids)} observations.')
-
-    #--------------------------------------------------------------------------
     def _input_observations(
             self, observation_id, field_id, exposure, repetitions, filter_name,
             observed=None, scheduled=None):
@@ -3224,6 +2956,446 @@ class ObservationManager(DBManager):
             raise ValueError('`date` must be string or list of strings.')
 
         return date_str
+
+    #--------------------------------------------------------------------------
+    def add_observations(
+            self, exposure, repetitions, filter_name, field_id=None,
+            telescope=None, check_for_duplicates=True, n_batch=1000):
+        """Add observation to database.
+
+        Parameters
+        ----------
+        exposure : float or list of float
+            Exposure time in seconds.
+        repetitions : int or list of int
+            Number of repetitions.
+        filter_name : str or list of str
+            Filter name.
+        field_id : int or list of int, optional
+            ID(s) of the associated field(s). If None, the same observation is
+            added to all active fields. The default is None.
+        telescope : str, optional
+            If field_id is None, this argument can be used to add observations
+            only to those fields that are associated to the specified
+            telescope. Otherwise, observations are added to all active
+            fields. The default is None.
+        check_for_duplicates, optional
+            If True, before adding any new observation it is checked whether an
+            active observation with the same parameters exists in the database.
+            If that is the case, the user us asked whether or not to add the
+            new observation anyway. This option may significantly increase the
+            time to run this method. To skip the checks, this option should be
+            set to False. The default is True.
+        n_batch : int, optinal
+            Add observations in batches of this size to the data base. The
+            default is 1000.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method uses `FieldManager()`. This method calls `get_filter_id()`,
+        `_check_for_duplicates()`, and `get_observations()`.
+        """
+
+        # prepare field IDs:
+        if field_id is None:
+            field_manager = FieldManager(self.db_file)
+            field_id = [field['field_id'] for field in
+                        field_manager.get_fields(
+                            telescope=telescope, active=True)]
+        elif isinstance(field_id, int):
+            field_id = [field_id]
+        elif isinstance(field_id, list):
+            pass
+        else:
+            raise ValueError(
+                    "'field_id' needs to be int, list of int, or None.")
+
+        n_fields = len(field_id)
+
+        # prepare exposures:
+        if type(exposure) in [float, int]:
+            exposure = float(exposure)
+            exposure = [exposure for __ in range(n_fields)]
+        elif isinstance(exposure, list):
+            if len(exposure) != n_fields:
+                raise ValueError(
+                        "'exposures' list need to be of the same length as " \
+                        "'field_id'.")
+        else:
+            raise ValueError("'exposure' needs to be float or list of floats.")
+
+        # prepare repetitions:
+        if isinstance(repetitions, int):
+            repetitions = [repetitions for __ in range(n_fields)]
+        elif isinstance(repetitions, list):
+            if len(repetitions) != n_fields:
+                raise ValueError(
+                        "'repetitions' list need to be of the same length " \
+                        "'as field_id'.")
+        else:
+            raise ValueError("'repetitions' needs to be int or list of int.")
+
+        # prepare filters:
+        if isinstance(filter_name, str):
+            filter_name = [filter_name for __ in range(n_fields)]
+        elif isinstance(filter_name, list):
+            if len(filter_name) != n_fields:
+                raise ValueError(
+                        "'filter_name' list need to be of the same length " \
+                        "'as field_id'.")
+        else:
+            raise ValueError("'filter_name' needs to be str or list of str.")
+
+        reactivate_all = False
+        add_all = False
+        skip_active = False
+        skip_inactive = False
+        filter_ids = {}
+
+        n_obs = len(field_id)
+        n_iter = ceil(n_obs / n_batch)
+
+        with SQLiteConnection(self.db_file) as connection:
+            # iterate through batches:
+            for i in range(n_iter):
+                j = i * n_batch
+                k = (i + 1) * n_batch
+                print(
+                    '\rAdding observations {0}-{1} of {2} ({3:.1f}%)..'.format(
+                            j, k-1 if k <= n_obs else n_obs, n_obs,
+                            i*100./n_iter),
+                    end='')
+
+                data = []
+
+                # prepare entries for adding:
+                for field, exp, rep, filt in zip(
+                        field_id[j:k], exposure[j:k], repetitions[j:k],
+                        filter_name[j:k]):
+
+                    # check if filter exists:
+                    if filt not in filter_ids.keys():
+                        filter_id = self.get_filter_id(filt)
+
+                        # stop, if the filter does not exist and is not added:
+                        if filter_id is False:
+                            print("Filter was not added to database. No " \
+                                  "observations are added either.")
+                            return False
+
+                        filter_ids[filt] = filter_id
+
+                    # check if observation entry exists:
+                    if check_for_duplicates:
+                        add, reactivate_all, add_all, skip_active, \
+                        skip_inactive = self._check_for_duplicates(
+                                    field, exp, rep, filt, reactivate_all,
+                                    add_all, skip_active, skip_inactive)
+                    else:
+                        add = True
+
+                    # add to data:
+                    if add:
+                        data.append((field, exp, rep, filter_ids[filt], False,
+                                     False, True))
+
+                # add to data base:
+                query = """\
+                    INSERT INTO Observations (
+                        field_id, exposure, repetitions, filter_id, done,
+                        scheduled, active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?);
+                    """
+                self._query(connection, query, many=data, commit=True)
+
+        print(f"\r{n_obs} observation(s) added to data base.                 ")
+
+    #--------------------------------------------------------------------------
+    def get_filter_id(self, filter_name):
+        """Get the filter ID by the filter name.
+
+        Parameters
+        ----------
+        filter_name : str
+            Filter name.
+
+        Returns
+        -------
+        filter_id : int
+            Filter ID.
+
+        Notes
+        -----
+        If the filter name does not exist in the database, the user is asked
+        whether or not to add it.
+        This method calls `_add_filter()`.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT filter_id, filter
+                FROM Filters
+                WHERE filter='{0}';
+                """.format(filter_name)
+            result = self._query(connection, query).fetchone()
+
+        if not result:
+            userin = input(
+                    f"Filter '{filter_name} does not exist. Add it to data " \
+                    "base? (y/n)")
+
+            if userin.lower() in ['y', 'yes', 'make it so!']:
+                filter_id = self._add_filter(filter_name)
+            else:
+                filter_id = False
+
+        else:
+            filter_id = result['filter_id']
+
+        return filter_id
+
+    #--------------------------------------------------------------------------
+    def get_observations(
+            self, observation_id=None, field_id=None, exposure=None,
+            repetitions=None, filter_name=None, done=None, scheduled=None,
+            active=True, essential_columns_only=False):
+        """Query an observation from the database.
+
+        Parameters
+        ----------
+        observation_id : int or None, optional
+            If given, the observation with this ID is returned. All other
+            arguments are irrelevant and ignored. If None, use the other
+            arguments to specify which observations should be returned. The
+            default is None.
+        field_id : int or None, optional
+            ID of the associated field. The default is None.
+        exposure : float or None, optional
+            Exposure time in seconds. The default is None.
+        repetitions : int or None, optional
+            Number of repetitions. The default is None.
+        filter_name : str or None, optional
+            Filter name.
+        done : bool or None, optional
+            If True, only search for finished observations. If False, only
+            search for unfinished observations. If None, search for
+            observations regardless of whether they are finished or not. The
+            default is None.
+        scheduled : bool or None, optional
+            If True, only search for scheduled observations. If False, only
+            search for non-scheduled observations. If None, search for
+            observations regardless of whether they are scheduled or not. The
+            default is None.
+        done : bool or None, optional
+            If True, only search for finished observations. If False, only
+            search for observations not yet finished. If None, search for
+            observations regardless of whether they are finished or not. The
+            default is None.
+        scheduled : bool or None, optional
+            If True, only search for scheduled observations. If False, only
+            search for observations not scheduled. If None, search for
+            observations regardless of whether they are scheduled or not. The
+            default is None.
+        active : bool or None, optional
+            If True, only search for active observations. If False, only search
+            for inactive observations. If None, search for observations
+            regardless of whether they are active or not. The default is True.
+        essential_columns_only : bool, optional
+            If True and field_id is not None, only the following columns are
+            queried: observation_id, exposure, repetitions, filter. Otherwise,
+            all columns are queried. The default is False.
+
+        Returns
+        -------
+        results : list of dict
+            Each list item is a dict with observation parameters. The list is
+            empty if no observation was found matching the criteria.
+        """
+
+        # define which columns to query:
+        if field_id is not None and essential_columns_only:
+            columns = 'observation_id, exposure, repetitions, filter'
+        else:
+            columns = 'observation_id, field_id, exposure, repetitions, ' \
+                    'filter, done, scheduled, active, date_done'
+
+        # define SQL WHERE clause, when observation ID is provided:
+        if observation_id is not None:
+            where_clause = f'WHERE observation_id = {observation_id}'
+
+        # define SQL WHERE conditions, when no observation ID is provided:
+        else:
+            where_clauses = []
+
+            if field_id is None:
+                pass
+            elif isinstance(field_id, int):
+                where_clause = f'field_id = {field_id}'
+                where_clauses.append(where_clause)
+            else:
+                raise ValueError("`field_id` must be int or None.")
+
+            if exposure is None:
+                pass
+            elif type(exposure) in [float, int]:
+                where_clause = f'exposure = {exposure}'
+                where_clauses.append(where_clause)
+            else:
+                raise ValueError("`exposure` must be float or None.")
+
+            if repetitions is None:
+                pass
+            elif isinstance(repetitions, int):
+                where_clause = f'repetitions = {repetitions}'
+                where_clauses.append(where_clause)
+            else:
+                raise ValueError("`repetitions` must be int or None.")
+
+            if filter_name is None:
+                pass
+            elif isinstance(filter_name, str):
+                where_clause = f"filter = '{filter_name}'"
+                where_clauses.append(where_clause)
+            else:
+                raise ValueError("`filter_name` must be str or None.")
+
+            if active is None:
+                pass
+            elif active:
+                where_clause = 'active = TRUE'
+                where_clauses.append(where_clause)
+            else:
+                where_clause = 'active = FALSE'
+                where_clauses.append(where_clause)
+
+            if done is None:
+                pass
+            elif done:
+                where_clause = 'done = TRUE'
+                where_clauses.append(where_clause)
+            else:
+                where_clause = 'done = FALSE'
+                where_clauses.append(where_clause)
+
+            if scheduled is None:
+                pass
+            elif scheduled:
+                where_clause = 'scheduled = TRUE'
+                where_clauses.append(where_clause)
+            else:
+                where_clause = 'scheduled = FALSE'
+                where_clauses.append(where_clause)
+
+            if where_clauses:
+                where_clause = ' AND '.join(where_clauses)
+                where_clause = f'WHERE ({where_clause})'
+            else:
+                where_clause = ''
+
+        # query:
+        with SQLiteConnection(self.db_file) as connection:
+            query = """\
+                SELECT {0}
+                FROM Observations AS o
+                LEFT JOIN Filters AS f
+                ON o.filter_id = f.filter_id
+                {1}
+                """.format(columns, where_clause)
+            results = self._query(connection, query).fetchall()
+
+        return results
+
+    #--------------------------------------------------------------------------
+    def activate(self, observation_ids):
+        """Activate one or multiple observations.
+
+        Parameters
+        ----------
+        observation_ids : int
+            ID of the observation that should be set to active.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `observation_id` is neither int nor list.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method does not check if the observation(s) corresponding to the
+        given ID(s) are actually inactive, before being set to active.
+        """
+
+        if isinstance(observation_ids, int):
+            observation_ids = [observation_ids]
+        elif type(observation_ids) in [list, tuple]:
+            pass
+        else:
+            raise ValueError("`observation_ids` must be int or list.")
+
+        with SQLiteConnection(self.db_file) as connection:
+            for observation_id in observation_ids:
+                query = """\
+                    UPDATE Observations
+                    SET active = True
+                    WHERE observation_id = {0}
+                    """.format(observation_id)
+                self._query(connection, query, commit=False)
+
+            connection.commit()
+
+        print(f'Activated {len(observation_ids)} observation(s).')
+
+    #--------------------------------------------------------------------------
+    def deactivate(self, observation_ids):
+        """Deactivate one or multiple observations.
+
+        Parameters
+        ----------
+        observation_ids : int
+            ID of the observation that should be set to inactive.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `observation_id` is neither int nor list.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method does not check if the observation(s) corresponding to the
+        given ID(s) are actually active, before being set to inactive.
+        """
+
+        if isinstance(observation_ids, int):
+            observation_ids = [observation_ids]
+        elif type(observation_ids) in [list, tuple]:
+            pass
+        else:
+            raise ValueError("`observation_ids` must be int or list.")
+
+        with SQLiteConnection(self.db_file) as connection:
+            for observation_id in observation_ids:
+                query = """\
+                    UPDATE Observations
+                    SET active = FALSE
+                    WHERE observation_id = {0}
+                    """.format(observation_id)
+                self._query(connection, query, commit=False)
+
+            connection.commit()
+
+        print(f'Deactivated {len(observation_ids)} observations.')
 
     #--------------------------------------------------------------------------
     def set_observed(
