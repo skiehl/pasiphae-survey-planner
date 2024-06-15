@@ -14,7 +14,8 @@ from time import sleep
 from textwrap import dedent
 
 import constraints as c
-from db import FieldManager, ObservabilityManager, TelescopeManager
+from db import FieldManager, GuidestarManager, ObservabilityManager, \
+        ObservationManager, TelescopeManager
 from prioritizer import Prioritizer
 from utilities import true_blocks
 
@@ -2216,6 +2217,59 @@ class SurveyPlanner:
                 field[f'priority{label}'] = priorities[label][i]
 
     #--------------------------------------------------------------------------
+    def _add_guidestars(self, fields):
+        """
+        Add guide stars to the provided fields.
+
+        Parameters
+        ----------
+        fields : list
+            List of field dictionaries as returned by
+            surveyplanner.Surveyplanner.get_fields().
+
+        Returns
+        -------
+        None
+        """
+
+        print('Add guide stars to fields..')
+
+        # database connection:
+        manager = GuidestarManager(self.dbname)
+
+        for field in fields:
+            guidestars = manager.get_guidestars(
+                    field_id=field['field_id'], essential_columns_only=True)
+            field['guidestars'] = guidestars
+
+    #--------------------------------------------------------------------------
+    def _add_observations(self, fields):
+        """
+        Add pending observations to the provided fields.
+
+        Parameters
+        ----------
+        fields : list
+            List of field dictionaries as returned by
+            surveyplanner.Surveyplanner.get_fields().
+
+        Returns
+        -------
+        None
+        """
+
+        print('Add observations to fields..')
+
+        # database connection:
+        manager = ObservationManager(self.dbname)
+
+        for field in fields:
+            observations = manager.get_observations(
+                    field_id=field['field_id'], done=False,
+                    essential_columns_only=True)
+            field['observations'] = observations
+
+    #--------------------------------------------------------------------------
     def get_fields(
             self, observable_night=None, observable_time=None, telescope=None,
             observed=None, pending=None, active=True):
@@ -2407,15 +2461,27 @@ class SurveyPlanner:
                     "No prioritizer(s) set yet. Use `set_prioritizer()` first."
                     )
 
+        timeit_start = Time.now()
         # get active, observable, pending fields:
         print('Query observable, pending fields..')
         fields = self.get_fields(
                 observable_night=night, telescope=telescope, pending=True,
                 active=True)
+        print('Finished after', Time.now() - timeit_start)
 
         # prioritize:
         print('Get priorities..')
+        timeit_start = Time.now()
         self._get_priorities(fields)
+        print('Finished after', Time.now() - timeit_start)
+
+        timeit_start = Time.now()
+        self._add_guidestars(fields)
+        print('Finished after', Time.now() - timeit_start)
+
+        timeit_start = Time.now()
+        self._add_observations(fields)
+        print('Finished after', Time.now() - timeit_start)
 
         self.fields = fields
 

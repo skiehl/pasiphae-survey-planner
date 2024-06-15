@@ -1888,7 +1888,7 @@ class GuidestarManager(DBManager):
 
         # define queried columns:
         if essential_columns_only:
-            columns = 'guidestar_id, ra, dec'
+            columns = 'guidestar_id, ra, dec, mag'
         else:
             columns = '*'
 
@@ -2160,7 +2160,7 @@ class GuidestarManager(DBManager):
         return field_ids
 
     #--------------------------------------------------------------------------
-    def _add_guidestar(self, field_ids, ras, decs, n_batch=1000):
+    def _add_guidestar(self, field_ids, ras, decs, mags, n_batch=1000):
         """Add new guidestars to the database.
 
         Parameters
@@ -2171,6 +2171,8 @@ class GuidestarManager(DBManager):
             Guidestar right ascensions.
         decs : astropy.coord.Angle
             Guidestar declinations.
+        mags : list
+            Guidestar magnitudes.
         n_batch : int, optinal
             Add guidestars in batches of this size to the data base. The
             default is 1000.
@@ -2194,21 +2196,23 @@ class GuidestarManager(DBManager):
                             n_guidestars, i*100./n_iter),
                     end='')
 
-                data = [(int(field_id), float(ra), float(dec), True) \
-                        for field_id, ra, dec in zip(
-                                field_ids[j:k], ras.rad[j:k], decs.rad[j:k])]
+                data = [(int(field_id), float(ra), float(dec), float(mag),
+                         True) for field_id, ra, dec, mag in zip(
+                                field_ids[j:k], ras.rad[j:k], decs.rad[j:k],
+                                mags[j:k])]
 
                 query = """\
                     INSERT INTO Guidestars (
-                        field_id, ra, dec, active)
-                    VALUES (?, ?, ?, ?)
+                        field_id, ra, dec, mag, active)
+                    VALUES (?, ?, ?, ?, ?)
                     """
                 self._query(connection, query, many=data, commit=True)
 
         print(f'\r{n_guidestars} new guidestars added to database.           ')
 
     #--------------------------------------------------------------------------
-    def add_guidestars(self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
+    def add_guidestars(
+            self, field_ids, ra, dec, mag, warn_missing=True, warn_rep=0,
             warn_sep=0, n_batch=1000):
         """Add new guidestar(s) to the database.
 
@@ -2216,10 +2220,12 @@ class GuidestarManager(DBManager):
         ----------
         field_ids : int or list of int
             IDs of the fields that the guidestar coordinates correspond to.
-        ras : float or list of float
+        ra : float or list of float
             Guidestar right ascensions in rad.
-        decs : float or list of floats
+        dec : float or list of floats
             Guidestar declinations in rad.
+        mag : float or list of floats
+            Guidestar magnitude.
         warn_missing : bool, optional
             If True, warn about fields that do not have any associated
             guidestars stored in the database. The default is True.
@@ -2244,6 +2250,7 @@ class GuidestarManager(DBManager):
             Raised, if `field_ids` is neither int nor list-like.
             Raised, if `ra` is neither float nor list-like.
             Raised, if `dec` is neither float nor list-like.
+            Raised, if `mag` is neither float nor list-like.
             Raised, if `warn_missing` is not bool.
             Raised, if `warn_rep` is neither float nor astropy.coord.Angle.
             Raised, if `warn_sep` is neither float nor astropy.coord.Angle.
@@ -2288,6 +2295,14 @@ class GuidestarManager(DBManager):
 
         decs = Angle(decs, unit='rad')
 
+        if type(mag) in [float, int, np.float64]:
+            mag = [mag]
+        else:
+            try:
+                mag = list(mag)
+            except:
+                raise ValueError('`mag` must be float or list-like.')
+
         if not isinstance(warn_missing, bool):
             raise ValueError('`warn_missing` must be bool.')
 
@@ -2331,7 +2346,7 @@ class GuidestarManager(DBManager):
                     field_ids, ras, decs, separation_sep)
 
         # add to database:
-        self._add_guidestar(field_ids, ras, decs, n_batch=n_batch)
+        self._add_guidestar(field_ids, ras, decs, mag, n_batch=n_batch)
 
         # warn about fields without guidestars:
         if warn_missing:
@@ -4110,6 +4125,7 @@ class DBCreator(DBManager):
                         REFERENCES Fields (field_id),
                     ra float,
                     dec int,
+                    mag float,
                     active bool);
                 """
             self._query(connection, query, commit=True)
@@ -4310,7 +4326,7 @@ class DBCreator(DBManager):
 
     #--------------------------------------------------------------------------
     def add_guidestars(
-            self, field_ids, ra, dec, warn_missing=True, warn_rep=0,
+            self, field_ids, ra, dec, mag, warn_missing=True, warn_rep=0,
             warn_sep=0, n_batch=1000):
         """Add new guidestar(s) to the database.
 
@@ -4322,6 +4338,8 @@ class DBCreator(DBManager):
             Guidestar right ascensions in rad.
         decs : float or list of floats
             Guidestar declinations in rad.
+        mag : float or list of floats
+            Guidestar magnitudes.
         warn_missing : bool, optional
             If True, warn about fields that do not have any associated
             guidestars stored in the database. The default is True.
@@ -4347,7 +4365,7 @@ class DBCreator(DBManager):
 
         manager = GuidestarManager(self.db_file)
         manager.add_guidestars(
-                field_ids, ra, dec, warn_missing=warn_missing,
+                field_ids, ra, dec, mag, warn_missing=warn_missing,
                 warn_rep=warn_rep, warn_sep=warn_sep, n_batch=n_batch)
 
     #--------------------------------------------------------------------------
