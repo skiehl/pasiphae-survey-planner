@@ -2217,7 +2217,7 @@ class SurveyPlanner:
                 field[f'priority{label}'] = priorities[label][i]
 
     #--------------------------------------------------------------------------
-    def _add_guidestars(self, fields):
+    def _get_guidestars(self, fields):
         """
         Add guide stars to the provided fields.
 
@@ -2234,16 +2234,28 @@ class SurveyPlanner:
 
         print('Add guide stars to fields..')
 
-        # database connection:
+        # query guidestars:
         manager = GuidestarManager(self.dbname)
+        guidestars = manager.get_guidestars()
+        field_ids = np.array(
+                [guidestar['field_id'] for guidestar in guidestars])
 
+        # add guidestars to fields:
         for field in fields:
-            guidestars = manager.get_guidestars(
-                    field_id=field['field_id'], essential_columns_only=True)
-            field['guidestars'] = guidestars
+            i_sel = np.nonzero(field['field_id'] == field_ids)[0]
+            field_guidestars = []
+
+            # remove irrelevant info from dict(s):
+            for i in i_sel:
+                guidestar = guidestars[i]
+                del guidestar['field_id']
+                del guidestar['active']
+                field_guidestars.append(guidestar)
+
+            field['guidestars'] = field_guidestars
 
     #--------------------------------------------------------------------------
-    def _add_observations(self, fields):
+    def _get_observations(self, fields):
         """
         Add pending observations to the provided fields.
 
@@ -2260,14 +2272,28 @@ class SurveyPlanner:
 
         print('Add observations to fields..')
 
-        # database connection:
+        # query observations:
         manager = ObservationManager(self.dbname)
+        observations = manager.get_observations(done=False)
+        field_ids = np.array(
+                [observation['field_id'] for observation in observations])
 
+        # add guidestars to fields:
         for field in fields:
-            observations = manager.get_observations(
-                    field_id=field['field_id'], done=False,
-                    essential_columns_only=True)
-            field['observations'] = observations
+            i_sel = np.nonzero(field['field_id'] == field_ids)[0]
+            field_observations = []
+
+            # remove irrelevant info from dict(s):
+            for i in i_sel:
+                observation = observations[i]
+                del observation['field_id']
+                del observation['active']
+                del observation['done']
+                del observation['scheduled']
+                del observation['date_done']
+                field_observations.append(observation)
+
+            field['observations'] = field_observations
 
     #--------------------------------------------------------------------------
     def get_fields(
@@ -2476,11 +2502,11 @@ class SurveyPlanner:
         print('Finished after', Time.now() - timeit_start)
 
         timeit_start = Time.now()
-        self._add_guidestars(fields)
+        self._get_guidestars(fields)
         print('Finished after', Time.now() - timeit_start)
 
         timeit_start = Time.now()
-        self._add_observations(fields)
+        self._get_observations(fields)
         print('Finished after', Time.now() - timeit_start)
 
         self.fields = fields
