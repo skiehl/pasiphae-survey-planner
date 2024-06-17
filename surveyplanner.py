@@ -2008,6 +2008,7 @@ class SurveyPlanner:
         self.dbname = dbname
         self.prioritizers = {}
         self.weights = {}
+        self.fields = None
 
     #--------------------------------------------------------------------------
     def _get_observable_fields_by_night(
@@ -2208,13 +2209,15 @@ class SurveyPlanner:
         priorities['Joint'] = priorities_joint
 
         # add priorities to fields:
-        print('Add priorities to fields..')
+        print('Add priorities to fields..', end='')
         labels = priorities.keys()
 
         # iterate through fields:
         for i, field in enumerate(fields):
             for label in labels:
                 field[f'priority{label}'] = priorities[label][i]
+
+        print('done')
 
     #--------------------------------------------------------------------------
     def _get_guidestars(self, fields):
@@ -2232,7 +2235,7 @@ class SurveyPlanner:
         None
         """
 
-        print('Add guide stars to fields..')
+        print('Add guide stars to fields..', end='')
 
         # query guidestars:
         manager = GuidestarManager(self.dbname)
@@ -2254,6 +2257,8 @@ class SurveyPlanner:
 
             field['guidestars'] = field_guidestars
 
+        print('done')
+
     #--------------------------------------------------------------------------
     def _get_observations(self, fields):
         """
@@ -2270,7 +2275,7 @@ class SurveyPlanner:
         None
         """
 
-        print('Add observations to fields..')
+        print('Add observations to fields..', end='')
 
         # query observations:
         manager = ObservationManager(self.dbname)
@@ -2295,8 +2300,30 @@ class SurveyPlanner:
 
             field['observations'] = field_observations
 
+        print('done')
+
     #--------------------------------------------------------------------------
-    def get_fields(
+    def get_fields(self):
+        """Return the fields stored in the class instance
+
+        Returns
+        -------
+        fields : list of dict
+            List of fields. Each field dict contains the field parameters,
+            observability properties, and prioritization.
+        """
+
+        if self.fields is None:
+            print('No fields. Run `plan()` first.')
+            fields = []
+
+        else:
+            fields = self.fields
+
+        return fields
+
+    #--------------------------------------------------------------------------
+    def query_fields(
             self, observable_night=None, observable_time=None, telescope=None,
             observed=None, pending=None, active=True):
         """Get a list of fields, given specific selection criteria.
@@ -2487,28 +2514,20 @@ class SurveyPlanner:
                     "No prioritizer(s) set yet. Use `set_prioritizer()` first."
                     )
 
-        timeit_start = Time.now()
         # get active, observable, pending fields:
-        print('Query observable, pending fields..')
-        fields = self.get_fields(
+        print('Query observable, pending fields.. ', end='')
+        fields = self.query_fields(
                 observable_night=night, telescope=telescope, pending=True,
                 active=True)
-        print('Finished after', Time.now() - timeit_start)
+        print('done')
 
         # prioritize:
         print('Get priorities..')
-        timeit_start = Time.now()
         self._get_priorities(fields)
-        print('Finished after', Time.now() - timeit_start)
 
-        timeit_start = Time.now()
+        # add guide stars and observations:
         self._get_guidestars(fields)
-        print('Finished after', Time.now() - timeit_start)
-
-        timeit_start = Time.now()
         self._get_observations(fields)
-        print('Finished after', Time.now() - timeit_start)
-
         self.fields = fields
 
 #==============================================================================
