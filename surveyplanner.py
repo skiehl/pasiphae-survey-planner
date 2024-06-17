@@ -2423,7 +2423,7 @@ class SurveyPlanner:
 
         # check weights:
         if weights is None:
-            weights = np.ones(len(prioritizers))
+            weights = [1] * len(prioritizers)
 
         elif weights is not None:
             if type(weights) not in [list, tuple]:

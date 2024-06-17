@@ -9,7 +9,7 @@ from astropy.coordinates import Angle
 #from itertools import repeat
 #from multiprocessing import Manager, Pool, Process
 import numpy as np
-#from pandas import DataFrame
+from pandas import DataFrame
 #from statsmodels.api import add_constant, OLS
 #from time import sleep
 #from textwrap import dedent
@@ -231,6 +231,7 @@ class PrioritizerSkyCoverage(Prioritizer):
         weight2 = 1 - weight1
         priority = coverage_local * weight1 + coverage_max * weight2
 
+        # normalize:
         if self.normalize:
             priority /= priority.max()
 
@@ -304,6 +305,108 @@ class PrioritizerFieldStatus(Prioritizer):
 
             if self.setting and field['status'] == 'setting':
                 priority[i] = 1
+
+        return priority, self.label
+
+#==============================================================================
+
+class PrioritizerAnnualAvailability(Prioritizer):
+    """Assign priorities to fields based on their annual availability.
+    """
+
+    label = 'AnnualAvailability'
+
+    #--------------------------------------------------------------------------
+    def __init__(self, dbname, scale=1, normalize=False):
+        """Create PrioratizerAnnualAvailability instance.
+
+        Parameters
+        ----------
+        dbname : str
+            Database name. Required to query field coordinates.
+        scale : float, optional
+            If `scale` has value x, the priority equals
+            (1 - fraction of the year that a field is observable)**x.
+            E.g. `scale=1` equals linear scaling, `scale=2` equals quadratic
+            scaling. The default is 1.
+        normalize : bool, optional
+            If True, the priorities are rescaled such that the maximum priority
+            is 1. Otherwise, the maximum may be <=1. The default is False.
+
+        Returns
+        -------
+        None
+        """
+
+        # check input
+        if type(scale) not in [int, float] or scale <= 0:
+            raise ValueError("`scale` must be float or int with value > 0.")
+
+        self.dbname = dbname
+        self.scale = scale
+        self.normalize = normalize
+
+        # query annual field availabilities:
+        manager = FieldManager(self.dbname)
+        self.availabilities = DataFrame(manager.annual_availability())
+        self.availabilities.rename(
+                columns={'availability': 'available days'}, inplace=True)
+        self.availabilities['available rate'] = np.where(
+                self.availabilities['available days'] < 0, -1,
+                self.availabilities['available days'] / 365)
+
+    #--------------------------------------------------------------------------
+    def prioratize(self, fields):
+        """Assign priorities to fields.
+
+        Arguments
+        ---------
+        fields : list of dict
+            List of field dictionaries as returned by
+            surveyplanner.Surveyplanner.get_fields().
+
+        Returns
+        -------
+        priority : numpy.ndarray
+            Each entry is a priority in the range [0, 1] corresponding to one
+            field in the input field list.
+        self.label : str
+            The name of this prioritizer.
+
+        Notes
+        -----
+        Assign a higher priority to fields that are available fewer nights
+        throughout the year.
+        """
+
+        # get field availability rates:
+        availability = []
+
+        for field in fields:
+            i = np.argmax(field['field_id'] == self.availabilities['field_id'])
+            availability.append(self.availabilities.loc[i, 'available rate'])
+
+        availability = np.array(availability)
+        all_zero = False
+
+        # prioritization not possible due to insufficient observabilities:
+        if np.any(availability == -1):
+            print('WARNING: For some (or all) fields the annual availability '\
+                  'could not be estimated. Prioritization by annual '\
+                  'availability not possible. All priorities are set to 0.')
+            priority = np.zeros(availability.shape[0])
+            all_zero = True
+
+        # calculate priority:
+        else:
+            priority = (1 - availability)**self.scale
+
+        # set priority to 0, for fields never observable:
+        priority = np.where(availability == 0, 0, priority)
+
+        # normalize:
+        if self.normalize and not all_zero:
+            priority /= priority.max()
 
         return priority, self.label
 

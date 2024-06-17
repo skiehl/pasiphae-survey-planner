@@ -1802,6 +1802,52 @@ class FieldManager(DBManager):
         return results
 
     #--------------------------------------------------------------------------
+    def annual_availability(self):
+        """Query how many nights each active field is observable per year.
+
+        Returns
+        -------
+        results : list of dict
+            Each entry contains the field ID and the number of days the field
+            is observable per year. The value is -1 if the observability has
+            been checked for less than 365 consecutive days.
+        """
+
+        with SQLiteConnection(self.db_file) as connection:
+            query = """
+            SELECT tr1.field_id,
+            	CASE WHEN tr1.jd_next-tr1.jd_first-1 >= 365
+            	THEN a.availability
+            	ELSE -1
+            	END AS availability
+            FROM TimeRanges tr1
+            LEFT JOIN (
+            	SELECT o.field_id, COUNT(o.jd) AS availability
+            	FROM Observability o
+            	LEFT JOIN ObservabilityStatus os
+            	ON o.status_id = os.status_id
+            	LEFT JOIN TimeRanges tr2
+            	ON o.field_id = tr2.field_id
+            	WHERE (
+            		os.status != 'not observable'
+            		AND o.active = 1
+            		AND tr2.active = 1
+            		AND o.jd >= tr2.jd_next-366
+            		)
+            	GROUP BY o.field_id
+            	) AS a
+            ON a.field_id = tr1.field_id
+            """
+            results = self._query(connection, query).fetchall()
+
+            # replace Nones with 0:
+            for result in results:
+                if result['availability'] is None:
+                    result['availability'] = 0
+
+        return results
+
+    #--------------------------------------------------------------------------
     def info(self, telescope=None, active=True):
         """Print info about fields.
 
