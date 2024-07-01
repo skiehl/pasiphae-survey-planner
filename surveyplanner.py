@@ -2202,6 +2202,7 @@ class SurveyPlanner:
             priorities[label], __ = prioritizer.prioratize(fields)
             print('done')
 
+        # calculate weighted, joined priorities:
         priorities_joint = [
                 priorities[label] * self.weights[label] \
                 for label in self.prioritizers.keys()]
@@ -2299,6 +2300,43 @@ class SurveyPlanner:
                 field_observations.append(observation)
 
             field['observations'] = field_observations
+
+        print('done')
+
+    #--------------------------------------------------------------------------
+    def _get_annual_observability(self, fields):
+        """
+        Add annual observability to the provided fields.
+
+        Parameters
+        ----------
+        fields : list
+            List of field dictionaries as returned by
+            surveyplanner.Surveyplanner.get_fields().
+
+        Returns
+        -------
+        None
+        """
+
+        # annual availability prioritizer not set up - don't do anything:
+        if not 'AnnualAvailability' in self.prioritizers.keys():
+            return None
+
+        print('Add annual observability to fields..', end='')
+
+        availabilities = self.prioritizers['AnnualAvailability'].availabilities
+
+        # add annual availability to fields:
+        for field in fields:
+            i = np.argmax(
+                    field['field_id'] == availabilities['field_id'])
+
+            field_availability = {
+                    'available days': availabilities.loc[i, 'available days'],
+                    'available rate': availabilities.loc[i, 'available rate']}
+
+            field['annual availability'] = field_availability
 
         print('done')
 
@@ -2524,8 +2562,9 @@ class SurveyPlanner:
         # prioritize:
         print('Get priorities..')
         self._get_priorities(fields)
+        self._get_annual_observability(fields)
 
-        # add guide stars and observations:
+        # add guide stars and observations to fields:
         self._get_guidestars(fields)
         self._get_observations(fields)
         self.fields = fields
