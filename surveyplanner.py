@@ -2139,6 +2139,51 @@ class SurveyPlanner:
         return fields
 
     #--------------------------------------------------------------------------
+    def _get_fields_at_night(
+            self, night, telescope=None, observed=None, pending=None,
+            active=True):
+        """Get fields with observabilities during a given night, given specific
+        selection criteria.
+
+        Parameters
+        ----------
+        night : astropy.time.Time
+            Date of the night start. Time information is truncated.
+        telescope : str, optional
+            If specified, only fields associated with this telescope are
+            returned. The default is None.
+        observed : bool or None, optional
+            If True, iterate only through fields that have been observed at
+            least once. If False, iterate only through fields that have never
+            been observed. If None, iterate through fields irregardless of
+            whether they have  been observed or not. The default is None.
+        pending : bool or None, optional
+            If True, iterate only through fields that have pending observations
+            associated. If False, only iterate through fields that have no
+            pending observations associated. If None, iterate through fields
+            irregardless of whether they have pending observations associated
+            or not. The default is None.
+        active : bool or None, optional
+            If True, only iterate through active fields. If False, only iterate
+            through inactive fields. If None, iterate through fields active or
+            not. The default is True.
+
+        Returns
+        ------
+        fields : list of dict
+            Each list item is a dict with the field parameters.
+        """
+
+        # database connections:
+        field_manager = FieldManager(self.dbname)
+
+        fields = field_manager.get_fields(
+                telescope=telescope, observed=observed, pending=pending,
+                night=night, active=active)
+
+        return fields
+
+    #--------------------------------------------------------------------------
     def _get_fields(
             self, telescope=None, observed=None, pending=None, active=True):
         """Get a list of fields, given specific selection criteria.
@@ -2333,10 +2378,10 @@ class SurveyPlanner:
                     field['field_id'] == availabilities['field_id'])
 
             field_availability = {
-                    'available days': availabilities.loc[i, 'available days'],
-                    'available rate': availabilities.loc[i, 'available rate']}
+                    'available_days': availabilities.loc[i, 'available days'],
+                    'available_rate': availabilities.loc[i, 'available rate']}
 
-            field['annual availability'] = field_availability
+            field['annual_availability'] = field_availability
 
         print('done')
 
@@ -2362,8 +2407,8 @@ class SurveyPlanner:
 
     #--------------------------------------------------------------------------
     def query_fields(
-            self, observable_night=None, observable_time=None, telescope=None,
-            observed=None, pending=None, active=True):
+            self, observable_night=None, observable_time=None, night=None,
+            telescope=None, observed=None, pending=None, active=True):
         """Get a list of fields, given specific selection criteria.
 
         Parameters
@@ -2371,14 +2416,16 @@ class SurveyPlanner:
         observable_night : astropy.time.Time or str, optional
             If a date is given, only fields are returned that are observable
             during the night that starts on the specified date. Time
-            information is truncated. Either set this argument or
-            `observable_time`. If this argument is set, `observable_time` is
-            not used. The default is None.
+            information is truncated. The default is None.
         observable_time : astropy.time.Time or str, optional
             If a date and time is given, only fields are returned that are
-            observable at that specific time. Either set this argument or
-            `observable_night`. If `observable_night` is given, this argument
-            is ignored. The default is None.
+            observable at that specific time. If `observable_night` is given,
+            this argument is ignored. The default is None.
+        night : astropy.time.Time or str or None, optional
+            If a date is given, all fields and their observability status
+            (including non-observable) for the specified night are returned. If
+            `observable_night` or `observable_time` is given, this argument is
+            ignored. The default is None.
         telescope : str, optional
             If specified, only fields associated with this telescope are
             returned. The default is None.
@@ -2440,6 +2487,22 @@ class SurveyPlanner:
             # get fields:
             fields = self._get_observable_fields_by_datetime(
                     observable_time, telescope=telescope, observed=observed,
+                    pending=pending, active=active)
+
+        # get fields during a specific night:
+        elif night is not None:
+            # check input:
+            if isinstance(night, Time):
+                pass
+            elif isinstance(night, str):
+                night = Time(night)
+            else:
+                raise ValueError(
+                        "`night` must be astropy.time.Time or str.")
+
+            # get fields:
+            fields = self._get_fields_at_night(
+                    night, telescope=telescope, observed=observed,
                     pending=pending, active=active)
 
         # get fields regardless of their observability status:

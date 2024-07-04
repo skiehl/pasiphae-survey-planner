@@ -1588,8 +1588,8 @@ class FieldManager(DBManager):
     #--------------------------------------------------------------------------
     def get_fields(
             self, telescope=None, observed=None, pending=None,
-            observable_between=None, observable_time=None, active=True,
-            needs_obs_windows=None, init_obs_windows=False):
+            observable_between=None, observable_time=None, night=None,
+            active=True, needs_obs_windows=None, init_obs_windows=False):
         """Get fields from the database, given various selection criteria.
 
         Parameters
@@ -1611,14 +1611,17 @@ class FieldManager(DBManager):
         observable_between : tuple of str or None, optional
             Provide two strings that encode date+time. Then, only fields are
             returned that are observable (at least for some time) between the
-            two specified times. Either set this argument or
-            `observable_time`. If this argument is set, `observable_time` is
-            not used. The default is None.
+            two specified times. The default is None.
         observable_time : str or None, optional
             Provide a string that encodes a date+time. Then, only fields are
-            returned that are observable at that specific time. Either set this
-            argument or `observable_between`. If `observable_between` is given,
-            this argument is ignored. The default is None.
+            returned that are observable at that specific time. If
+            `observable_between` is given, this argument is ignored. The
+            default is None.
+        night : str or None, optional
+            Provide a string that encodes a date. All fields and their
+            observability status (including non-observable) for the specified
+            night are returned.If `observable_between` or `observable_time` is
+            given, this argument is ignored. The default is None.
         active : bool, optional
             If True, only query active fields. If False, only query inactive
             fields. If None, query fields independent of whether they are
@@ -1657,7 +1660,7 @@ class FieldManager(DBManager):
             selection = ", o.date_start, o.date_stop, o.duration, o.status, " \
                     "o.setting_duration"
             join = """\
-                INNER JOIN Observable AS o
+                LEFT JOIN Observable AS o
                 ON f.field_id = o.field_id
                 """
             condition = """\
@@ -1671,7 +1674,7 @@ class FieldManager(DBManager):
             selection = ", o.date_start, o.date_stop, o.duration, o.status, " \
                     "o.setting_duration"
             join = """\
-                INNER JOIN Observable AS o
+                LEFT JOIN Observable AS o
                 ON f.field_id = o.field_id
                 """
             condition = """\
@@ -1679,6 +1682,19 @@ class FieldManager(DBManager):
                     o.date_start <= '{0}'
                     AND o.date_stop > '{0}')
                 """.format(observable_time)
+
+        # set query condition for a specified night:
+        elif night:
+            jd = Time(Time(night).iso[:10]).jd # truncate time
+            selection = ", o.jd, o.date_start, o.date_stop, o.duration, " \
+                    "o.status, o.setting_duration"
+            join = """\
+                LEFT JOIN Observable AS o
+                ON f.field_id = o.field_id
+                """
+            condition = """\
+                WHERE o.jd = '{0}'
+                """.format(jd)
 
         # set query condition for observing window requirement:
         elif needs_obs_windows:
@@ -1712,6 +1728,14 @@ class FieldManager(DBManager):
             if telescope is None:
                 pass
             elif telescope != result['telescope']:
+                keep = False
+
+            # condition: observed or not:
+            if observed is None:
+                pass
+            elif observed and result['nobs_done'] == 0:
+                keep = False
+            elif not observed and result['nobs_done'] > 0:
                 keep = False
 
             # condition: pending or not:
@@ -2832,8 +2856,13 @@ class ObservationManager(DBManager):
 
             # check observations:
             for i, observation_id in enumerate(observation_ids):
-                observation = self.get_observations(
-                        observation_id=observation_id)[0]
+                try:
+                    observation = self.get_observations(
+                            observation_id=observation_id)[0]
+                except IndexError:
+                    raise ValueError(
+                            f'Observation ID {observation_id} does not '\
+                            'exist in database.')
 
                 # check if any observations are already marked as un/observed:
                 if scheduled is None:
@@ -4215,17 +4244,22 @@ class DBCreator(DBManager):
             # create Observable view:
             query = """\
                 CREATE VIEW Observable AS
-                    SELECT o.field_id, ow.date_start, ow.date_stop,
-                        ow.duration, os.status, o.setting_duration
-                    FROM Observability o
-                    LEFT JOIN ObservabilityStatus os
-                    ON o.status_id = os.status_id
-                    INNER JOIN ObsWindows ow
-                    ON o.observability_id = ow.observability_id
-                    WHERE (
-                    	o.active = 1
-                    	AND ow.active = 1
-                    	);
+                WITH o AS (
+                	SELECT o.observability_id, o.field_id, o.jd, os.status, o.setting_duration
+                	FROM Observability AS o
+                	LEFT JOIN ObservabilityStatus AS os
+                	ON o.status_id = os.status_id
+                	WHERE o.active = 1
+                	),
+                	ow AS (
+                	SELECT observability_id, date_start, date_stop, duration
+                	FROM ObsWindows
+                	WHERE active = 1
+                	)
+                SELECT *
+                FROM o
+                LEFT JOIN ow
+                ON o.observability_id = ow.observability_id;
                 """
             self._query(connection, query, commit=True)
             print("View 'Observable' created.")
