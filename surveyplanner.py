@@ -224,12 +224,23 @@ class Field:
                             - np.argmax(observable[::-1]))
                     t_stop = frame_temp.obstime[k]
 
+                # use Sun rise time, if stop time is later than Sun rise:
+                if t_stop > time_sunrise:
+                    t_stop = time_sunrise
+
+                # store observing window:
                 if t_start != t_stop:
                     obs_windows.append((t_start, t_stop))
 
         # in case of no precision refinement:
         else:
             for t_start, t_stop in temp_obs_windows:
+
+                # use Sun rise time, if stop time is later than Sun rise:
+                if t_stop > time_sunrise:
+                    t_stop = time_sunrise
+
+                # store observing window:
                 if t_start != t_stop:
                     obs_windows.append((t_start, t_stop))
 
