@@ -1585,6 +1585,8 @@ class ObservabilityPlanner:
             slope = model.params[1]
             intercept = model.params[0]
             setting_in = -intercept / slope - jd
+            setting_in = max(setting_in, 0)
+            setting_in = min(setting_in, 365)
 
         return status, setting_in
 
