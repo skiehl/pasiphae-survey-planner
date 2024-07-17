@@ -550,7 +550,8 @@ class FieldVisualizer(object, metaclass=ABCMeta):
         -----
         This is an abstract method. Different child classes may require
         different field information for plotting. This method has to be
-        implemented to provide this specific information.
+        implemented to provide this specific information. This method must
+        assign a pandas.DataFrame() to the class attribute `self.fields`.
         """
 
         # check if surveyplanner is available:
@@ -720,8 +721,19 @@ class FieldVisualizer(object, metaclass=ABCMeta):
 
     #--------------------------------------------------------------------------
     @abstractmethod
-    def plot(self):
+    def plot(self, ax=None, cax=None, **kwargs):
         """Plot the fields.
+
+        Parameters
+        ----------
+        ax : matplotlib.Axes or None
+            If None, a new Axes is created. Otherwise, the fields are plotted
+            to the provided Axes. The default is None.
+        cax : matplotlib.Axes or None
+            If None, a new Axes is created for the colorbar. Otherwise, the
+            colorbar is plotted in the provided Axes. The default is None.
+        **kwargs
+            Key word arguments forwarded to the plotting function.
 
         Returns
         -------
@@ -746,3 +758,124 @@ class FieldVisualizer(object, metaclass=ABCMeta):
         return self.fig, self.ax, self.cax
 
 #==============================================================================
+
+class SurveyVisualizer(FieldVisualizer):
+    """Visualize the survey status.
+    """
+
+    #--------------------------------------------------------------------------
+    def _get_fields(self):
+        """Get fields from the stored SurveyPlanner instance with the
+        information that is required for plotting.
+
+        Raises
+        ------
+        ValueError
+            Raised, if no SurveyPlanner instance was provided at class
+            instanciation.
+
+        Returns
+        -------
+        None
+        """
+
+        # check if surveyplanner is available:
+        if self.surveyplanner is None:
+            raise ValueError(
+                    "No survey planner was provided at instanciation. Cannot "
+                    "query fields. Either use `set_fields()` to provide fields"
+                    " for plotting or create new visualizer instance and "
+                    "provide `surveyplanner`.")
+
+        print('Querying fields..')
+
+        self.fields = DataFrame(self.surveyplanner.query_fields())
+        self._shift_ra()
+
+    #--------------------------------------------------------------------------
+    def _parse_fields(self, fields):
+        """Check if the provided fields contain the information that is
+        required for plotting.
+
+        Parameters
+        ----------
+        fields : any type
+            The "fields" that are provided as `fields` at class instanciation
+            or through the `set_fields()` method. Expected is a list of dict.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `fields` is None.
+            Raised, if `fields` is not list.
+            Raised, if any item in `fields` list is not dict.
+            Raised, if any dict in `fields` list does not contain all of the
+            keys listed in `keys`.
+
+        Returns
+        -------
+        bool
+            True, if the `fields` input fulfills the criteria. Otherwise,
+            a ValueError is raised.
+        """
+
+        keys = ['center_ra', 'center_dec', 'nobs_pending']
+        error_message = "List of fields does not have the correct format. " \
+                "Use SurveyPlanner().query_fields() to get a list of fields."
+
+        return super()._parse_fields(fields, keys, error_message)
+
+    #--------------------------------------------------------------------------
+    def plot(self, ax=None, cax=None, **kwargs):
+        """Plot the fields.
+
+        Parameters
+        ----------
+        ax : matplotlib.Axes or None
+            If None, a new Axes is created. Otherwise, the fields are plotted
+            to the provided Axes. The default is None.
+        cax : matplotlib.Axes or None
+            If None, a new Axes is created for the colorbar. Otherwise, the
+            colorbar is plotted in the provided Axes. The default is None.
+        **kwargs
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()`.
+
+        Returns
+        -------
+        self.fig : matplotlib.Figure
+            The figure.
+        self.ax : matplotlib.Axes
+            The axes containing the plot.
+        self.cax : matplotlib.Axes
+            The axes containing the colorbar.
+        """
+
+        # check if fields exist:
+        self._check_fields()
+        self.fields['status'] = np.where(
+                self.fields['nobs_pending'], 'pending', 'finished')
+
+        # define colors:
+        if 'cmap' in kwargs.keys():
+            cmap = kwargs['cmap']
+        else:
+            cmap = colors.ListedColormap([
+                    (0.32, 0.9, 0.29), (1, 0.95, 0.42)], name='green_grey')
+
+        norm = colors.BoundaryNorm(np.arange(-0.5, 2), cmap.N)
+        kwargs.pop('cmap', None)
+        kwargs.pop('norm', None)
+
+        # create figure:
+        self._create_figure(ax, cax)
+        sc = self.ax.scatter(
+                x=self.fields['center_ra'], y=self.fields['center_dec'],
+                c=self.fields['nobs_pending'], cmap=cmap, norm=norm, **kwargs)
+        cbar = plt.colorbar(sc, ticks=[0, 1], cax=self.cax)
+        cbar.ax.set_yticklabels(['finished', 'pending'])
+
+        return self.fig, self.ax, self.cax
+
+#==============================================================================
+
