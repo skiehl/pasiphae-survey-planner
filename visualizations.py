@@ -529,6 +529,7 @@ class FieldVisualizer(object, metaclass=ABCMeta):
         self.fig = None
         self.ax = None
         self.cax = None
+        self.projection = None
 
     #--------------------------------------------------------------------------
     @abstractmethod
@@ -678,11 +679,15 @@ class FieldVisualizer(object, metaclass=ABCMeta):
             self._get_fields(**kwargs)
 
     #--------------------------------------------------------------------------
-    def _create_figure(self, ax=None, cax=None):
+    def _create_figure(self, projection='mollweide', ax=None, cax=None):
         """Create a figure.
 
         Parameters
         ----------
+        projection : str, optional
+            Projection that should be used for plotting the field coordinates.
+            Must be 'mollweide', 'aitoff', 'hammer', or 'lambert'. The default
+            is 'mollweide'.
         ax : matplotlib.Axes or None, optional
             If None, a new axis is created. Otherwise, the provided Axes is
             kept. The default is None.
@@ -701,12 +706,14 @@ class FieldVisualizer(object, metaclass=ABCMeta):
         None
         """
 
-        if ax is None:
-            self.fig = plt.figure(figsize=(16, 10))
-            self.ax = self.fig.add_subplot(111, projection='mollweide')
-        elif isinstance(ax, plt.Axes):
+        if isinstance(ax, plt.Axes):
             self.fig = plt.gcf()
             self.ax = ax
+            self.projection = repr(ax)[1:-7].lower()
+        elif ax is None or projection != self.projection:
+            self.fig = plt.figure(figsize=(16, 10))
+            self.ax = self.fig.add_subplot(111, projection=projection)
+            self.projection = projection
         else:
             raise ValueError("`ax` must be matplotlib.Axes instance.")
 
@@ -743,7 +750,9 @@ class FieldVisualizer(object, metaclass=ABCMeta):
 
     #--------------------------------------------------------------------------
     @abstractmethod
-    def plot(self, galactic=False, ax=None, cax=None, **kwargs):
+    def plot(
+            self, galactic=False, projection='mollweide', ax=None, cax=None,
+            **kwargs):
         """Plot the fields.
 
         Parameters
@@ -751,6 +760,11 @@ class FieldVisualizer(object, metaclass=ABCMeta):
         galactic : bool, optional
             If True, the plot will show Galactic coordinates; otherwise
             Equatorial coordinates. The default is False.
+        projection : str, optional
+            Projection that should be used for plotting the field coordinates.
+            Must be 'mollweide', 'aitoff', 'hammer', 'lambert', or 'geo'. If
+            `ax` is provided, `projection` is ignored. The default is
+            'mollweide'.
         ax : matplotlib.Axes or None
             If None, a new Axes is created. Otherwise, the fields are plotted
             to the provided Axes. The default is None.
@@ -777,6 +791,9 @@ class FieldVisualizer(object, metaclass=ABCMeta):
 
         # check if fields exist:
         self._check_fields()
+
+        # create figure:
+        self._create_figure(projection, ax, cax)
 
         # custom code here
 
@@ -852,7 +869,9 @@ class SurveyVisualizer(FieldVisualizer):
         return super()._parse_fields(fields, keys, error_message)
 
     #--------------------------------------------------------------------------
-    def plot(self, galactic=False, ax=None, cax=None, **kwargs):
+    def plot(
+            self, galactic=False, projection='mollweide', ax=None, cax=None,
+            **kwargs):
         """Plot the fields.
 
         Parameters
@@ -860,6 +879,11 @@ class SurveyVisualizer(FieldVisualizer):
         galactic : bool, optional
             If True, the plot will show Galactic coordinates; otherwise
             Equatorial coordinates. The default is False.
+        projection : str, optional
+            Projection that should be used for plotting the field coordinates.
+            Must be 'mollweide', 'aitoff', 'hammer', 'lambert', or 'geo'. If
+            `ax` is provided, `projection` is ignored. The default is
+            'mollweide'.
         ax : matplotlib.Axes or None, optional
             If None, a new Axes is created. Otherwise, the fields are plotted
             to the provided Axes. The default is None.
@@ -885,6 +909,9 @@ class SurveyVisualizer(FieldVisualizer):
         self.fields['status'] = np.where(
                 self.fields['nobs_pending'], 'pending', 'finished')
 
+        # create figure:
+        self._create_figure(projection, ax, cax)
+
         # define colors:
         if 'cmap' in kwargs.keys():
             cmap = kwargs['cmap']
@@ -903,8 +930,7 @@ class SurveyVisualizer(FieldVisualizer):
             x = self.fields['center_ra']
             y = self.fields['center_dec']
 
-        # create figure:
-        self._create_figure(ax, cax)
+        # plot:
         sc = self.ax.scatter(
                 x=x, y=y, c=self.fields['nobs_pending'], cmap=cmap, norm=norm,
                 **kwargs)
