@@ -566,6 +566,7 @@ class FieldVisualizer(object, metaclass=ABCMeta):
 
         # custom code here
 
+        self._galactic_coords()
         self._shift_ra()
 
     #--------------------------------------------------------------------------
@@ -623,6 +624,26 @@ class FieldVisualizer(object, metaclass=ABCMeta):
                     raise ValueError(error_message)
 
         return True
+
+    #--------------------------------------------------------------------------
+    def _galactic_coords(self):
+        """Add Galactic coordinates to fields dataframe.
+
+        Returns
+        -------
+        None
+        """
+        coord = SkyCoord(
+                self.fields['center_ra'], self.fields['center_dec'],
+                unit='rad')
+        coord = coord.galactic
+
+        self.fields.insert(4, 'center_l', coord.l.rad)
+        self.fields.insert(5, 'center_b', coord.b.rad)
+        self.fields['center_l'] = np.where(
+                self.fields['center_l'] > np.pi,
+                self.fields['center_l'] - 2 * np.pi,
+                self.fields['center_l'])
 
     #--------------------------------------------------------------------------
     def _shift_ra(self):
@@ -717,15 +738,19 @@ class FieldVisualizer(object, metaclass=ABCMeta):
 
         self._parse_fields(fields)
         self.fields = DataFrame(fields)
+        self._galactic_coords()
         self._shift_ra()
 
     #--------------------------------------------------------------------------
     @abstractmethod
-    def plot(self, ax=None, cax=None, **kwargs):
+    def plot(self, galactic=False, ax=None, cax=None, **kwargs):
         """Plot the fields.
 
         Parameters
         ----------
+        galactic : bool, optional
+            If True, the plot will show Galactic coordinates; otherwise
+            Equatorial coordinates. The default is False.
         ax : matplotlib.Axes or None
             If None, a new Axes is created. Otherwise, the fields are plotted
             to the provided Axes. The default is None.
@@ -790,6 +815,7 @@ class SurveyVisualizer(FieldVisualizer):
         print('Querying fields..')
 
         self.fields = DataFrame(self.surveyplanner.query_fields())
+        self._galactic_coords()
         self._shift_ra()
 
     #--------------------------------------------------------------------------
@@ -826,15 +852,18 @@ class SurveyVisualizer(FieldVisualizer):
         return super()._parse_fields(fields, keys, error_message)
 
     #--------------------------------------------------------------------------
-    def plot(self, ax=None, cax=None, **kwargs):
+    def plot(self, galactic=False, ax=None, cax=None, **kwargs):
         """Plot the fields.
 
         Parameters
         ----------
-        ax : matplotlib.Axes or None
+        galactic : bool, optional
+            If True, the plot will show Galactic coordinates; otherwise
+            Equatorial coordinates. The default is False.
+        ax : matplotlib.Axes or None, optional
             If None, a new Axes is created. Otherwise, the fields are plotted
             to the provided Axes. The default is None.
-        cax : matplotlib.Axes or None
+        cax : matplotlib.Axes or None, optional
             If None, a new Axes is created for the colorbar. Otherwise, the
             colorbar is plotted in the provided Axes. The default is None.
         **kwargs
@@ -867,11 +896,18 @@ class SurveyVisualizer(FieldVisualizer):
         kwargs.pop('cmap', None)
         kwargs.pop('norm', None)
 
+        if galactic:
+            x = self.fields['center_l']
+            y = self.fields['center_b']
+        else:
+            x = self.fields['center_ra']
+            y = self.fields['center_dec']
+
         # create figure:
         self._create_figure(ax, cax)
         sc = self.ax.scatter(
-                x=self.fields['center_ra'], y=self.fields['center_dec'],
-                c=self.fields['nobs_pending'], cmap=cmap, norm=norm, **kwargs)
+                x=x, y=y, c=self.fields['nobs_pending'], cmap=cmap, norm=norm,
+                **kwargs)
         cbar = plt.colorbar(sc, ticks=[0, 1], cax=self.cax)
         cbar.ax.set_yticklabels(['finished', 'pending'])
 
