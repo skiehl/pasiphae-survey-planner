@@ -331,7 +331,6 @@ class FieldGridVisualizer():
     def orthographic(
             self, *grids, gal_lat_lim=0, central_longitude=25.,
             central_latitude=45., outlines=False, ax=None, **kwargs):
-        # TODO: docstring
         """Orthographic plot of fields.
 
         Parameters
@@ -479,5 +478,271 @@ class FieldGridVisualizer():
                         linestyle='None', marker='o', **kwargs)
 
         return fig, ax
+
+#==============================================================================
+
+class FieldVisualizer(object, metaclass=ABCMeta):
+    """Parent class for field visualizations.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, surveyplanner=None, fields=None):
+        """Parent class for field visualizations.
+
+        Parameters
+        ----------
+        surveyplanner : SurveyPlanner-type, optional
+            A SurveyPlanner instance that provides an access point to a
+            database to query the fields that should be plotted. If not
+            provided, fields have to be given either through the `fields`
+            argument or through the `set_fields()` method. The default is None.
+        fields : list of dict, optional
+            A list of dictionaries as returned e.g. by the
+            `SurveyPlanner().query_fields()` method. The default is None.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `surveyplanner` is not a SurveyPlanner-instance.
+
+        Returns
+        -------
+        None
+        """
+
+        # check surveyplanner input:
+        if not (surveyplanner is None
+                or isinstance(surveyplanner, SurveyPlanner)):
+            raise ValueError(
+                "`surveyplanner` must be SurveyPlanner-instance or None.")
+
+        self.surveyplanner = surveyplanner
+
+        # check fields input:
+        self._parse_fields(fields)
+        self.fields = fields
+
+        if surveyplanner is None and fields is None:
+            print("WARNING: No surveyplanner and no fields provided. Use " \
+                  "`set_fields() to provide fields before plotting.")
+
+        self.fig = None
+        self.ax = None
+        self.cax = None
+
+    #--------------------------------------------------------------------------
+    @abstractmethod
+    def _get_fields(self):
+        """Get fields from the stored SurveyPlanner instance with the
+        information that is required for plotting.
+
+        Raises
+        ------
+        ValueError
+            Raised, if no SurveyPlanner instance was provided at class
+            instanciation.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This is an abstract method. Different child classes may require
+        different field information for plotting. This method has to be
+        implemented to provide this specific information.
+        """
+
+        # check if surveyplanner is available:
+        if self.surveyplanner is None:
+            raise ValueError(
+                    "No survey planner was provided at instanciation. Cannot "
+                    "query fields. Either use `set_fields()` to provide fields"
+                    " for plotting or create new visualizer instance and "
+                    "provide `surveyplanner`.")
+
+        print('Querying fields..')
+
+        # custom code here
+
+        self._shift_ra()
+
+    #--------------------------------------------------------------------------
+    @abstractmethod
+    def _parse_fields(self, fields, keys, error_message):
+        """Check if the provided fields contain the information that is
+        required for plotting.
+
+        Parameters
+        ----------
+        fields : any type
+            The "fields" that are provided as `fields` at class instanciation
+            or through the `set_fields()` method. Expected is a list of dict.
+        keys : list of str
+            The keys that each list item dictionary must contain.
+        error_message : TYPE
+            The error message to print if the `fields` are not providing the
+            required information.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `fields` is None.
+            Raised, if `fields` is not list.
+            Raised, if any item in `fields` list is not dict.
+            Raised, if any dict in `fields` list does not contain all of the
+            keys listed in `keys`.
+
+        Returns
+        -------
+        bool
+            True, if the `fields` input fulfills the criteria. Otherwise,
+            a ValueError is raised.
+
+        Notes
+        -----
+        This is an abstract method. Each class may require different entries
+        in the dictionaries listed in `fields`. The child class should specify
+        the `keys` and `error_message` and then call this parent method as:
+        super()._parse_fields(fields, keys, error_message).
+        """
+
+        if fields is None:
+            return True
+
+        if not isinstance(fields, list):
+            raise ValueError(error_message)
+
+        for field in fields:
+            if not isinstance(field, dict):
+                raise ValueError(error_message)
+
+            for key in keys:
+                if key not in field.keys():
+                    raise ValueError(error_message)
+
+        return True
+
+    #--------------------------------------------------------------------------
+    def _shift_ra(self):
+        """Shift RA to the correct quadrants for plotting.
+
+        Returns
+        -------
+        None
+        """
+
+        self.fields['center_ra'] = np.where(
+                self.fields['center_ra'] > np.pi,
+                self.fields['center_ra'] - 2 * np.pi,
+                self.fields['center_ra'])
+
+    #--------------------------------------------------------------------------
+    def _check_fields(self, **kwargs):
+        """Check if fields have been stored. Otherwise, get fields from the
+        stored SurveyPlanner instance.
+
+        Parameters
+        ----------
+        **kwargs
+            Key word arguments forwarded to the `_get_fields()` method.
+
+        Returns
+        -------
+        None
+        """
+
+        if self.fields is None:
+            self._get_fields(**kwargs)
+
+    #--------------------------------------------------------------------------
+    def _create_figure(self, ax=None, cax=None):
+        """Create a figure.
+
+        Parameters
+        ----------
+        ax : matplotlib.Axes or None, optional
+            If None, a new axis is created. Otherwise, the provided Axes is
+            kept. The default is None.
+        cax : matplotlib.Axes or None, optional
+            If None, a new axis is created. Otherwise, the provided Axes is
+            kept. The default is None.
+
+        Raises
+        ------
+        ValueError
+            Raise, if `ax` is neither matplotlib.Axes nor None.
+            Raise, if `cax` is neither matplotlib.Axes nor None.
+
+        Returns
+        -------
+        None
+        """
+
+        if ax is None:
+            self.fig = plt.figure(figsize=(16, 10))
+            self.ax = self.fig.add_subplot(111, projection='mollweide')
+        elif isinstance(ax, plt.Axes):
+            self.fig = plt.gcf()
+            self.ax = ax
+        else:
+            raise ValueError("`ax` must be matplotlib.Axes instance.")
+
+        if cax is None:
+            pass
+        elif isinstance(cax, plt.Axes):
+            self.cax = cax
+        else:
+            raise ValueError("`cax` must be matplotlib.Axes instance.")
+
+        self.ax.grid(True, color='m', linestyle=':')
+
+    #--------------------------------------------------------------------------
+    def set_fields(self, fields):
+        """Set fields for plotting.
+
+        Parameters
+        ----------
+        fields : list of dict
+            List of dictionaries, where each list item provides on field's
+            information. The `fields` should be queried from a SurveyPlanner
+            instance throught the `SurveyPlanner().query_fields()` or
+            SurveyPlanner().get_fields()` methods.
+
+        Returns
+        -------
+        None
+        """
+
+        self._parse_fields(fields)
+        self.fields = DataFrame(fields)
+        self._shift_ra()
+
+    #--------------------------------------------------------------------------
+    @abstractmethod
+    def plot(self):
+        """Plot the fields.
+
+        Returns
+        -------
+        self.fig : matplotlib.Figure
+            The figure.
+        self.ax : matplotlib.Axes
+            The axes containing the plot.
+        self.cax : matplotlib.Axes
+            The axes containing the colorbar, if created. Otherwise, None.
+
+        Notes
+        -----
+        This is an abstract method. Each child class will require its specific
+        plotting method.
+        """
+
+        # check if fields exist:
+        self._check_fields()
+
+        # custom code here
+
+        return self.fig, self.ax, self.cax
 
 #==============================================================================
