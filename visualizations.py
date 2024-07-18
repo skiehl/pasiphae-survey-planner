@@ -727,6 +727,50 @@ class FieldVisualizer(object, metaclass=ABCMeta):
         self.ax.grid(True, color='m', linestyle=':')
 
     #--------------------------------------------------------------------------
+    def _get_coord(self, galactic):
+        """Get Equatorial or Galactic coordinates.
+
+        Parameters
+        ----------
+        galactic : bool
+            If True, return Galactic coordinates. Otherwise, Equatorial
+            coordinates.
+
+        Returns
+        -------
+        x : pandas.Series
+            Either Equatorial right ascension or Galactic longitude in radians.
+        y : pandas.Series
+            Either Equatorial declination or Galactic latitude in radians.
+        """
+
+        if galactic:
+            x = self.fields['center_l']
+            y = self.fields['center_b']
+
+        else:
+            x = self.fields['center_ra']
+            y = self.fields['center_dec']
+
+        return x, y
+
+    #--------------------------------------------------------------------------
+    def _plot_other_fields(self, x, y, sel, other_kws):
+        # TODO: docstring
+
+        # default settings for plotting non-setting fields:
+        if 'c' not in other_kws.keys():
+            other_kws['c'] = '0.8'
+        if 'marker' not in other_kws.keys():
+            other_kws['marker'] = '.'
+        if 's' not in other_kws.keys():
+            other_kws['s'] = 2
+
+        # plot non-setting fields:
+        self.ax.scatter(
+                x=x.loc[~sel], y=y.loc[~sel], **other_kws)
+
+    #--------------------------------------------------------------------------
     def set_fields(self, fields):
         """Set fields for plotting.
 
@@ -762,9 +806,8 @@ class FieldVisualizer(object, metaclass=ABCMeta):
             Equatorial coordinates. The default is False.
         projection : str, optional
             Projection that should be used for plotting the field coordinates.
-            Must be 'mollweide', 'aitoff', 'hammer', 'lambert', or 'geo'. If
-            `ax` is provided, `projection` is ignored. The default is
-            'mollweide'.
+            Must be 'mollweide', 'aitoff', 'hammer', or 'lambert'. If `ax` is
+            provided, `projection` is ignored. The default is 'mollweide'.
         ax : matplotlib.Axes or None
             If None, a new Axes is created. Otherwise, the fields are plotted
             to the provided Axes. The default is None.
@@ -794,6 +837,9 @@ class FieldVisualizer(object, metaclass=ABCMeta):
 
         # create figure:
         self._create_figure(projection, ax, cax)
+
+        # select appropriate coordinates:
+        x, y = self._get_coord(galactic)
 
         # custom code here
 
@@ -912,6 +958,9 @@ class SurveyVisualizer(FieldVisualizer):
         # create figure:
         self._create_figure(projection, ax, cax)
 
+        # select appropriate coordinates:
+        x, y = self._get_coord(galactic)
+
         # define colors:
         if 'cmap' in kwargs.keys():
             cmap = kwargs['cmap']
@@ -922,13 +971,6 @@ class SurveyVisualizer(FieldVisualizer):
         norm = colors.BoundaryNorm(np.arange(-0.5, 2), cmap.N)
         kwargs.pop('cmap', None)
         kwargs.pop('norm', None)
-
-        if galactic:
-            x = self.fields['center_l']
-            y = self.fields['center_b']
-        else:
-            x = self.fields['center_ra']
-            y = self.fields['center_dec']
 
         # plot:
         sc = self.ax.scatter(
@@ -941,3 +983,393 @@ class SurveyVisualizer(FieldVisualizer):
 
 #==============================================================================
 
+class ObservabilityVisualizer(FieldVisualizer):
+    """Visualize the observability of fields at a given date.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, surveyplanner=None, fields=None):
+        """Visualize the observability of fields at a given date.
+
+        Parameters
+        ----------
+        surveyplanner : SurveyPlanner-type, optional
+            A SurveyPlanner instance that provides an access point to a
+            database to query the fields that should be plotted. If not
+            provided, fields have to be given either through the `fields`
+            argument or through the `set_fields()` method. The default is None.
+        fields : list of dict, optional
+            A list of dictionaries as returned e.g. by the
+            `SurveyPlanner().query_fields()` method. The default is None.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `surveyplanner` is not a SurveyPlanner-instance.
+
+        Returns
+        -------
+        None
+        """
+
+        super().__init__(surveyplanner=surveyplanner, fields=fields)
+        self.night = None
+
+    #--------------------------------------------------------------------------
+    def _check_fields(self, night):
+        """Check if fields have been stored for the requested night. Otherwise,
+        get fields from the stored SurveyPlanner instance.
+
+        Parameters
+        ----------
+        night : astropy.time.Time or str
+            Check if this provided night is identical with the one stored in
+            this class instance. If yes, then use the stored fields.
+            Otherwise, query fields for this given night from the stored
+            SurveyPlanner instance.
+
+        Returns
+        -------
+        None
+        """
+
+        if self.fields is None or self.night != night:
+            self._get_fields(night=night)
+
+    #--------------------------------------------------------------------------
+    def _get_fields(self, night):
+        """Get fields from the stored SurveyPlanner instance for the specified
+        night with the information that is required for plotting.
+
+        Parameters
+        ----------
+        night : astropy.time.Time or str
+            The night for which fields should be queried.
+
+        Raises
+        ------
+        ValueError
+            Raised, if no SurveyPlanner instance was provided at class
+            instanciation.
+
+        Returns
+        -------
+        None
+        """
+
+        # check if surveyplanner is available:
+        if self.surveyplanner is None:
+            raise ValueError(
+                    "No survey planner was provided at instanciation. Cannot "
+                    "query fields. Either use `set_fields()` to provide fields"
+                    " for plotting or create new visualizer instance and "
+                    "provide `surveyplanner`.")
+
+        # check that night is defined:
+        if type(night) not in [Time, str]:
+            raise ValueError(
+                    "`night` must be astropy.time.Time or str.")
+
+        print('Querying fields..')
+
+        self.fields = DataFrame(self.surveyplanner.query_fields(night=night))
+        self._galactic_coords()
+        self._shift_ra()
+
+    #--------------------------------------------------------------------------
+    def _parse_fields(self, fields):
+        """Check if the provided fields contain the information that is
+        required for plotting.
+
+        Parameters
+        ----------
+        fields : any type
+            The "fields" that are provided as `fields` at class instanciation
+            or through the `set_fields()` method. Expected is a list of dict.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `fields` is None.
+            Raised, if `fields` is not list.
+            Raised, if any item in `fields` list is not dict.
+            Raised, if any dict in `fields` list does not contain all of the
+            keys listed in `keys`.
+
+        Returns
+        -------
+        bool
+            True, if the `fields` input fulfills the criteria. Otherwise,
+            a ValueError is raised.
+        """
+
+        keys = ['center_ra', 'center_dec', 'date_start', 'date_stop',
+                'duration', 'status', 'setting_duration']
+        error_message = "List of fields does not have the correct format. " \
+                "Use e.g. SurveyPlanner().query_fields(date='2024-01-01') " \
+                "to get a list of fields."
+
+        return super()._parse_fields(fields, keys, error_message)
+
+    #--------------------------------------------------------------------------
+    def _plot_time(self, x, y, key, ax, cax, plot_kws, other_kws):
+        """Plot the field observability window start or stop time.
+
+        Parameters
+        ----------
+        x : pandas.Series
+            Either Equatorial right ascension or Galactic longitude in radians.
+        y : pandas.Series
+            Either Equatorial declination or Galactic latitude in radians.
+        ax : matplotlib.Axes or None, optional
+            If None, a new Axes is created. Otherwise, the fields are plotted
+            to the provided Axes. The default is None.
+        cax : matplotlib.Axes or None, optional
+            If None, a new Axes is created for the colorbar. Otherwise, the
+            colorbar is plotted in the provided Axes. The default is None.
+        plot_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the observable fields. The
+            default is {}.
+        other_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the non-observable fields.
+            The default is {}.
+
+        Returns
+        -------
+        None
+        """
+        # TODO: docstring
+
+        # extract observability start or stop time for color coding:
+        sel = self.fields['status'] != 'not observable'
+        time = self.fields.loc[sel, f'date_{key}'].values.astype(str)
+        time = Time(time).mjd
+        time -= np.floor(time.max())
+        time *= 24
+
+        # plot start/stop time:
+        sc = self.ax.scatter(
+                x=x.loc[sel], y=y.loc[sel], c=time, **plot_kws)
+        cbar = plt.colorbar(sc, cax=self.cax)
+
+        # plot non-observable fields:
+        self._plot_other_fields(x, y, sel, other_kws)
+
+        # edit colorbar:
+        cbar.ax.set_ylabel(f'Observability window {key} UTC')
+        cbar.ax.yaxis.set_major_locator(MultipleLocator(1))
+        labels = [text.get_text().replace('−', '-') \
+                  for text in cbar.ax.get_yticklabels()]
+        labels = np.array(labels, dtype=float)
+        labels = np.mod(labels, 24).astype(int)
+        cbar.ax.set_yticklabels(labels)
+
+    #--------------------------------------------------------------------------
+    def _plot_duration(self, x, y, ax, cax, plot_kws, other_kws):
+        """Plot the field observability window duration.
+
+        Parameters
+        ----------
+        x : pandas.Series
+            Either Equatorial right ascension or Galactic longitude in radians.
+        y : pandas.Series
+            Either Equatorial declination or Galactic latitude in radians.
+        ax : matplotlib.Axes or None, optional
+            If None, a new Axes is created. Otherwise, the fields are plotted
+            to the provided Axes. The default is None.
+        cax : matplotlib.Axes or None, optional
+            If None, a new Axes is created for the colorbar. Otherwise, the
+            colorbar is plotted in the provided Axes. The default is None.
+        plot_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the observable fields. The
+            default is {}.
+        other_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the non-observable fields.
+            The default is {}.
+
+        Returns
+        -------
+        None
+        """
+
+        # extract duration for color coding:
+        sel = self.fields['status'] != 'not observable'
+        duration = self.fields.loc[sel, 'duration'].values * 24
+
+        # plot start/stop time:
+        sc = self.ax.scatter(
+                x=x.loc[sel], y=y.loc[sel], c=duration, **plot_kws)
+        cbar = plt.colorbar(sc, cax=self.cax)
+        cbar.ax.set_ylabel('Observability window duration (hours)')
+
+        # plot non-observable fields:
+        self._plot_other_fields(x, y, sel, other_kws)
+
+    #--------------------------------------------------------------------------
+    def _plot_setting_duration(self, x, y, ax, cax, plot_kws, other_kws):
+        """Plot the field setting duration.
+
+        Parameters
+        ----------
+        x : pandas.Series
+            Either Equatorial right ascension or Galactic longitude in radians.
+        y : pandas.Series
+            Either Equatorial declination or Galactic latitude in radians.
+        ax : matplotlib.Axes or None, optional
+            If None, a new Axes is created. Otherwise, the fields are plotted
+            to the provided Axes. The default is None.
+        cax : matplotlib.Axes or None, optional
+            If None, a new Axes is created for the colorbar. Otherwise, the
+            colorbar is plotted in the provided Axes. The default is None.
+        plot_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the setting fields. The
+            default is {}.
+        other_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the non-setting fields.
+            The default is {}.
+
+        Returns
+        -------
+        None
+        """
+
+        # extract duration for color coding:
+        sel = self.fields['status'] == 'setting'
+        duration = self.fields.loc[sel, 'setting_duration'].values
+
+        # plot start/stop time:
+        sc = self.ax.scatter(
+                x=x.loc[sel], y=y.loc[sel],
+                c=duration, vmin=0, vmax=365, **plot_kws)
+        cbar = plt.colorbar(sc, cax=self.cax)
+        cbar.ax.set_ylabel('Field setting duration (days)')
+
+        # plot non-setting fields:
+        self._plot_other_fields(x, y, sel, other_kws)
+
+    #--------------------------------------------------------------------------
+    def _plot_status(self, x, y, ax, cax, plot_kws):
+        """Plot the field status.
+
+        Parameters
+        ----------
+        x : pandas.Series
+            Either Equatorial right ascension or Galactic longitude in radians.
+        y : pandas.Series
+            Either Equatorial declination or Galactic latitude in radians.
+        ax : matplotlib.Axes or None, optional
+            If None, a new Axes is created. Otherwise, the fields are plotted
+            to the provided Axes. The default is None.
+        cax : matplotlib.Axes or None, optional
+            If None, a new Axes is created for the colorbar. Otherwise, the
+            colorbar is plotted in the provided Axes. The default is None.
+        plot_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()`. The default is {}.
+
+        Returns
+        -------
+        None
+        """
+
+        # extract observability status for color coding:
+        status = {'not observable': 0, 'rising': 1, 'plateauing': 2,
+                  'setting': 3}
+        c = list(map(lambda s: status[s], self.fields['status']))
+
+        # create 3-color colormap:
+        if 'cmap' not in plot_kws.keys():
+            plot_kws['cmap'] = plt.cm.rainbow
+
+        norm = colors.BoundaryNorm(np.arange(-0.5, 4.5), plot_kws['cmap'].N)
+
+        # plot fields:
+        sc = self.ax.scatter(
+                x, y, c=c, norm=norm, marker='o', **plot_kws)
+        cbar = plt.colorbar(sc, ticks=range(4), cax=self.cax)
+        cbar.ax.set_yticklabels([
+                'not observable', 'rising', 'plateauing', 'setting'])
+
+    #--------------------------------------------------------------------------
+    def plot(
+            self, obs, night=None, galactic=False, projection='mollweide',
+            ax=None, cax=None, plot_kws={}, other_kws={}):
+        """Plot the fields.
+
+        Parameters
+        ----------
+        obs : str
+            Observing window property that should be displayed as color.
+            Choose 'status', 'start', 'stop', 'duration', or
+            'setting_duration'.
+        night : astropy.time.Time, str, or None, optional
+            The night for which fields should be plotted. If fields have been
+            provided through the `set_fields()` method, this argument can be
+            left as None. If a date is provided and it does not match the date
+            associated with the already stored fields, fields are queried. The
+            default is None.
+        galactic : bool, optional
+            If True, the plot will show Galactic coordinates; otherwise
+            Equatorial coordinates. The default is False.
+        projection : str, optional
+            Projection that should be used for plotting the field coordinates.
+            Must be 'mollweide', 'aitoff', 'hammer', 'lambert', or 'geo'. If
+            `ax` is provided, `projection` is ignored. The default is
+            'mollweide'.
+        ax : matplotlib.Axes or None, optional
+            If None, a new Axes is created. Otherwise, the fields are plotted
+            to the provided Axes. The default is None.
+        cax : matplotlib.Axes or None, optional
+            If None, a new Axes is created for the colorbar. Otherwise, the
+            colorbar is plotted in the provided Axes. The default is None.
+        plot_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the fields of interest.
+            The default is {}.
+        other_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the remaining fields. E.g.
+            the non-observable or non setting fields. The default is {}.
+
+        Returns
+        -------
+        self.fig : matplotlib.Figure
+            The figure.
+        self.ax : matplotlib.Axes
+            The axes containing the plot.
+        self.cax : matplotlib.Axes
+            The axes containing the colorbar.
+        """
+
+        # check if fields exist:
+        self._check_fields(night=night)
+
+        # create figure:
+        self._create_figure(projection, ax, cax)
+
+        # select appropriate coordinates:
+        x, y = self._get_coord(galactic)
+
+        if obs in ['start', 'stop']:
+            cax = self._plot_time(x, y, obs, ax, cax, plot_kws, other_kws)
+        elif obs == 'duration':
+            cax = self._plot_duration(x, y, ax, cax, plot_kws, other_kws)
+        elif obs == 'setting_duration':
+            cax = self._plot_setting_duration(
+                    x, y, ax, cax, plot_kws, other_kws)
+        elif obs == 'status':
+            cax = self._plot_status(x, y, ax, cax, plot_kws)
+        else:
+            raise ValueError(
+                    "`obs` must be 'start', 'stop', 'duration', " \
+                    "'setting_duration', or 'status'.")
+
+        return self.fig, self.ax, self.cax
+
+#==============================================================================
