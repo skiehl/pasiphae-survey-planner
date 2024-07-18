@@ -1373,3 +1373,143 @@ class ObservabilityVisualizer(FieldVisualizer):
         return self.fig, self.ax, self.cax
 
 #==============================================================================
+
+class AnnualObservabilityVisualizer(FieldVisualizer):
+    """Visualize the annual observability of fields.
+    """
+
+    #--------------------------------------------------------------------------
+    def _get_fields(self):
+        """Get fields from the stored SurveyPlanner instance with the
+        information that is required for plotting.
+
+        Raises
+        ------
+        ValueError
+            Raised, if no SurveyPlanner instance was provided at class
+            instanciation.
+
+        Returns
+        -------
+        None
+        """
+        # check if surveyplanner is available:
+        if self.surveyplanner is None:
+            raise ValueError(
+                    "No survey planner was provided at instanciation. Cannot "
+                    "query fields. Either use `set_fields()` to provide fields"
+                    " for plotting or create new visualizer instance and "
+                    "provide `surveyplanner`.")
+
+        print('Querying fields..')
+
+        surveyplanner = deepcopy(self.surveyplanner)
+        prioritizer = PrioritizerAnnualAvailability(surveyplanner.dbname)
+        surveyplanner.set_prioritizer(prioritizer)
+        fields = surveyplanner.query_fields()
+        surveyplanner._get_annual_observability(fields)
+        self.fields = DataFrame(fields)
+        self._galactic_coords()
+        self._shift_ra()
+
+    #--------------------------------------------------------------------------
+    def _parse_fields(self, fields):
+        """Check if the provided fields contain the information that is
+        required for plotting.
+
+        Parameters
+        ----------
+        fields : any type
+            The "fields" that are provided as `fields` at class instanciation
+            or through the `set_fields()` method. Expected is a list of dict.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `fields` is None.
+            Raised, if `fields` is not list.
+            Raised, if any item in `fields` list is not dict.
+            Raised, if any dict in `fields` list does not contain all of the
+            keys listed in `keys`.
+
+        Returns
+        -------
+        bool
+            True, if the `fields` input fulfills the criteria. Otherwise,
+            a ValueError is raised.
+        """
+
+        keys = ['center_ra', 'center_dec', 'annual_availability']
+        error_message = "List of fields does not have the correct format. " \
+                "Use e.g. SurveyPlanner().plan('2024-01-01') with the " \
+                "PrioritizerAnnualAvailability added as prioritizer and " \
+                "then SurveyPlanner().get_fields() to get a list of fields."
+
+        return super()._parse_fields(fields, keys, error_message)
+
+    #--------------------------------------------------------------------------
+    def plot(
+            self, rate=False, galactic=False, projection='mollweide',
+            ax=None, cax=None, plot_kws={}):
+        """Plot the fields.
+
+        Parameters
+        ----------
+        rate : bool, optional
+            If True, plot annual availability rate. Otherwise, plot count of
+            available days per year. The default is False.
+        galactic : bool, optional
+            If True, the plot will show Galactic coordinates; otherwise
+            Equatorial coordinates. The default is False.
+        projection : str, optional
+            Projection that should be used for plotting the field coordinates.
+            Must be 'mollweide', 'aitoff', 'hammer', 'lambert', or 'geo'. If
+            `ax` is provided, `projection` is ignored. The default is
+            'mollweide'.
+        ax : matplotlib.Axes or None, optional
+            If None, a new Axes is created. Otherwise, the fields are plotted
+            to the provided Axes. The default is None.
+        cax : matplotlib.Axes or None, optional
+            If None, a new Axes is created for the colorbar. Otherwise, the
+            colorbar is plotted in the provided Axes. The default is None.
+        plot_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()`. The default is {}.
+
+        Returns
+        -------
+        self.fig : matplotlib.Figure
+            The figure.
+        self.ax : matplotlib.Axes
+            The axes containing the plot.
+        self.cax : matplotlib.Axes
+            The axes containing the colorbar.
+        """
+
+        # check if fields exist:
+        self._check_fields()
+
+        # create figure:
+        self._create_figure(projection, ax, cax)
+
+        # select appropriate coordinates:
+        x, y = self._get_coord(galactic)
+
+        # extract annual availability for color coding:
+        availability = self.fields.annual_availability.apply(Series)
+
+        if rate:
+            availability = availability['available_rate']
+            label = 'Annual availability rate'
+        else:
+            availability = availability['available_days']
+            label = 'Annual availability (days)'
+
+        # plot start/stop time:
+        sc = self.ax.scatter(x=x, y=y, c=availability, **plot_kws)
+        cbar = plt.colorbar(sc, cax=self.cax)
+        cbar.ax.set_ylabel(label)
+
+        return self.fig, self.ax, self.cax
+
+#==============================================================================
