@@ -745,7 +745,7 @@ class FieldVisualizer(object, metaclass=ABCMeta):
         """
 
         if galactic:
-            x = self.fields['center_l']
+            x = self.fields['center_l'] * -1 # for plotting from +180 to -180
             y = self.fields['center_b']
 
         else:
@@ -769,6 +769,32 @@ class FieldVisualizer(object, metaclass=ABCMeta):
         # plot non-setting fields:
         self.ax.scatter(
                 x=x.loc[~sel], y=y.loc[~sel], **other_kws)
+
+    #--------------------------------------------------------------------------
+    def _reverse_xticklabels(self):
+        """Reverse the x-axis tick labels in Galactic coordinates plots.
+
+        Returns
+        -------
+        None
+        """
+
+        # get tick labels:
+        labels = self.ax.get_xticklabels()
+        labels_x = []
+        labels_y = []
+        labels_text = []
+
+        for label in labels:
+            labels_x.append(label._x)
+            labels_y.append(label._y)
+            labels_text.append(label._text)
+
+        # reverse tick labels:
+        labels_new = [
+                plt.Text(x, y, text) for x, y, text in \
+                zip(labels_x, labels_y, labels_text[::-1])]
+        self.ax.set_xticklabels(labels_new)
 
     #--------------------------------------------------------------------------
     def set_fields(self, fields):
@@ -842,6 +868,10 @@ class FieldVisualizer(object, metaclass=ABCMeta):
         x, y = self._get_coord(galactic)
 
         # custom code here
+
+        # reverse x tick labels for Galactic coordinate plots:
+        if galactic:
+            self._reverse_xticklabels()
 
         return self.fig, self.ax, self.cax
 
@@ -979,6 +1009,10 @@ class SurveyVisualizer(FieldVisualizer):
         cbar = plt.colorbar(sc, ticks=[0, 1], cax=self.cax)
         cbar.ax.set_yticklabels(['finished', 'pending'])
 
+        # reverse x tick labels for Galactic coordinate plots:
+        if galactic:
+            self._reverse_xticklabels()
+
         return self.fig, self.ax, self.cax
 
 #==============================================================================
@@ -1075,6 +1109,7 @@ class ObservabilityVisualizer(FieldVisualizer):
         self.fields = DataFrame(self.surveyplanner.query_fields(night=night))
         self._galactic_coords()
         self._shift_ra()
+        self.night = night
 
     #--------------------------------------------------------------------------
     def _parse_fields(self, fields):
@@ -1140,7 +1175,6 @@ class ObservabilityVisualizer(FieldVisualizer):
         -------
         None
         """
-        # TODO: docstring
 
         # extract observability start or stop time for color coding:
         sel = self.fields['status'] != 'not observable'
@@ -1158,13 +1192,15 @@ class ObservabilityVisualizer(FieldVisualizer):
         self._plot_other_fields(x, y, sel, other_kws)
 
         # edit colorbar:
-        cbar.ax.set_ylabel(f'Observability window {key} UTC')
-        cbar.ax.yaxis.set_major_locator(MultipleLocator(1))
-        labels = [text.get_text().replace('−', '-') \
-                  for text in cbar.ax.get_yticklabels()]
-        labels = np.array(labels, dtype=float)
-        labels = np.mod(labels, 24).astype(int)
-        cbar.ax.set_yticklabels(labels)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            cbar.ax.set_ylabel(f'Observability window {key} UTC')
+            cbar.ax.yaxis.set_major_locator(MultipleLocator(1))
+            labels = [text.get_text().replace('−', '-') \
+                      for text in cbar.ax.get_yticklabels()]
+            labels = np.array(labels, dtype=float)
+            labels = np.mod(labels, 24).astype(int)
+            cbar.ax.set_yticklabels(labels)
 
     #--------------------------------------------------------------------------
     def _plot_duration(self, x, y, ax, cax, plot_kws, other_kws):
@@ -1285,7 +1321,7 @@ class ObservabilityVisualizer(FieldVisualizer):
 
         # create 3-color colormap:
         if 'cmap' not in plot_kws.keys():
-            plot_kws['cmap'] = plt.cm.rainbow
+            plot_kws['cmap'] = plt.cm.rainbow_r
 
         norm = colors.BoundaryNorm(np.arange(-0.5, 4.5), plot_kws['cmap'].N)
 
@@ -1369,6 +1405,10 @@ class ObservabilityVisualizer(FieldVisualizer):
             raise ValueError(
                     "`obs` must be 'start', 'stop', 'duration', " \
                     "'setting_duration', or 'status'.")
+
+        # reverse x tick labels for Galactic coordinate plots:
+        if galactic:
+            self._reverse_xticklabels()
 
         return self.fig, self.ax, self.cax
 
@@ -1509,6 +1549,10 @@ class AnnualObservabilityVisualizer(FieldVisualizer):
         sc = self.ax.scatter(x=x, y=y, c=availability, **plot_kws)
         cbar = plt.colorbar(sc, cax=self.cax)
         cbar.ax.set_ylabel(label)
+
+        # reverse x tick labels for Galactic coordinate plots:
+        if galactic:
+            self._reverse_xticklabels()
 
         return self.fig, self.ax, self.cax
 
