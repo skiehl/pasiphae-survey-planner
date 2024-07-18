@@ -917,7 +917,7 @@ class SurveyVisualizer(FieldVisualizer):
     #--------------------------------------------------------------------------
     def plot(
             self, galactic=False, projection='mollweide', ax=None, cax=None,
-            **kwargs):
+            plot_kws={}):
         """Plot the fields.
 
         Parameters
@@ -936,9 +936,9 @@ class SurveyVisualizer(FieldVisualizer):
         cax : matplotlib.Axes or None, optional
             If None, a new Axes is created for the colorbar. Otherwise, the
             colorbar is plotted in the provided Axes. The default is None.
-        **kwargs
+        plot_kws : dict, optional
             Key word arguments forwarded to the plotting function
-            `matplotlib.pyplot.scatter()`.
+            `matplotlib.pyplot.scatter()`. The default is {}.
 
         Returns
         -------
@@ -962,20 +962,20 @@ class SurveyVisualizer(FieldVisualizer):
         x, y = self._get_coord(galactic)
 
         # define colors:
-        if 'cmap' in kwargs.keys():
-            cmap = kwargs['cmap']
+        if 'cmap' in plot_kws.keys():
+            cmap = plot_kws['cmap']
         else:
             cmap = colors.ListedColormap([
                     (0.32, 0.9, 0.29), (1, 0.95, 0.42)], name='green_grey')
 
         norm = colors.BoundaryNorm(np.arange(-0.5, 2), cmap.N)
-        kwargs.pop('cmap', None)
-        kwargs.pop('norm', None)
+        plot_kws.pop('cmap', None)
+        plot_kws.pop('norm', None)
 
         # plot:
         sc = self.ax.scatter(
                 x=x, y=y, c=self.fields['nobs_pending'], cmap=cmap, norm=norm,
-                **kwargs)
+                **plot_kws)
         cbar = plt.colorbar(sc, ticks=[0, 1], cax=self.cax)
         cbar.ax.set_yticklabels(['finished', 'pending'])
 
