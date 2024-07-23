@@ -36,120 +36,33 @@ class Field:
     """A field in the sky."""
 
     #--------------------------------------------------------------------------
-    def __init__(
-            self, fov, center_ra, center_dec, tilt=0., field_id=None,
-            jd_first_observability=None, jd_next_observability=None,
-            n_obs_tot=0, n_obs_done=0, n_obs_pending=0):
+    def __init__(self, center_ra, center_dec):
         """A field in the sky.
 
         Parameters
         ----------
-        fov : float
-            Field of view in radians. Diameter East to West and North to South.
         center_ra : float
             Right ascension of the field center in radians.
         center_dec : float
             Declination of the field center in radians.
-        tilt : float, optional
-            Tilt of the field such that the top and bottom borders are not
-            parallel to the horizon. The default is 0..
-        field_id : int, optional
-            ID of the field. The default is None.
-        jd_first_observability : float, optional
-            The earliest Julian date for which an observing window was
-            calculated for this field. The default is None.
-        jd_next_observability : float, optional
-            The latest Julian date for which an observing window was calculated
-            for this field. The default is None.
-        n_obs_tot : int, optional
-            The number of observations associated with this field, irregardless
-            of being pending or finished. The default is 0.
-        n_obs_done : int, optional
-            The number of observations finished for this field. The default is
-            0.
-        n_obs_pending : int, optional
-            The number of observations pending for this field. The default is
-            0.
 
         Returns
         -------
-        None.
+        None
         """
 
-        self.id = field_id
-        self.fov = Angle(fov, unit='rad')
         self.center_coord = SkyCoord(center_ra, center_dec, unit='rad')
-        self.center_ra = self.center_coord.ra
-        self.center_dec = self.center_coord.dec
-        self.tilt = Angle(tilt, unit='rad')
-        self.jd_first_observability = jd_first_observability
-        self.jd_next_observability = jd_next_observability
-        self.obs_windows = []
-        self.status = 0
-        self.setting_in = -1
-        self.n_obs_tot = n_obs_tot
-        self.n_obs_done = n_obs_done
-        self.n_obs_pending = n_obs_pending
-        self.priority = -1
 
     #--------------------------------------------------------------------------
-    def __str__(self):
-        """Return information about the field instance.
-
-        Returns
-        -------
-        info : str
-            Description of main field properties.
-        """
-
-        info = dedent("""\
-            Sky field {0:s}
-            Field of view: {1:8.4f} arcmin
-            Center RA:     {2:8.4f} deg
-            Center Dec:    {3:+8.4f} deg
-            Tilt:          {4:+8.4f} deg
-            Status:        {5}
-            Observations:  {6} total
-                           {7} pending
-                           {8} done
-            """.format(
-                f'{self.id}' if self.id is not None else '',
-                self.fov.arcmin, self.center_ra.deg, self.center_dec.deg,
-                self.tilt.deg, self._status_to_str(), self.n_obs_tot,
-                self.n_obs_pending, self.n_obs_done))
-
-        return info
-
-    #--------------------------------------------------------------------------
-    def _status_to_str(self):
-        """Convert the field status ID to readable information.
-
-        Returns
-        -------
-        status_str : str
-            Description of the field status.
-        """
-
-        if self.status == 1:
-            status_str = 'init'
-        elif self.status == 2:
-            status_str = 'not observable'
-        elif self.status == 3:
-            status_str = 'rising'
-        elif self.status == 4:
-            status_str = 'plateauing'
-        elif self.status == 5:
-            status_str = 'setting in {0:.2f}'.format(self.setting_in)
-
-        return status_str
-
-    #--------------------------------------------------------------------------
-    def get_obs_window(
-            self, telescope, frame, time_sunrise, refine):
+    def _get_obs_window(
+            self, observable, telescope, frame, time_sunrise, refine):
         """Calculate time windows when the field is observable.
 
         Parameters
         ----------
+        observable : numpy.ndarray
+            Boolean-type array, where True marks when the field is observable
+            and False marks when it is not observable.
         telescope : Telescope
             Telescope for which to calculate observability.
         frame : astropy.coordinates.AltAz
@@ -176,11 +89,11 @@ class Field:
         This method uses a frame as input instead of a start and stop time
         and interval, from which the frame could be created. The advantage is
         that the same initial frame can be used for all fields.
+        This method is called by `self.get_observability()`.
         """
 
         obs_windows = []
         temp_obs_windows = []
-        observable = telescope.constraints.get(self.center_coord, frame)
         blocks = true_blocks(observable)
 
         for i, j in blocks:
@@ -247,92 +160,93 @@ class Field:
         return obs_windows
 
     #--------------------------------------------------------------------------
-    def get_obs_duration(self):
-        """Get the total duration of all observing windows.
-
-        Returns
-        -------
-        duration : astropy.units.Quantity
-            The duration in hours.
-        """
-
-        duration = 0 * u.day
-
-        for obs_window in self.obs_windows:
-            duration += obs_window.duration
-
-        return duration
-
-    #--------------------------------------------------------------------------
-    def add_obs_window(self, obs_window):
-        """Add observation window(s) to field.
+    def _get_observability_status(self, observable):
+        """Determine the observability status of the field.
 
         Parameters
         ----------
-        obs_window : ObsWindow or list
-            Observation window(s) that is/are added to the field. If multiple
-            windows should be added provide a list of ObsWindow instances.
+        observable : numpy.ndarray
+            Boolean-type array, where True marks when the field is observable
+            and False marks when it is not observable, according to the hard
+            constraints.
 
         Returns
         -------
-        None.
+        status : str
+            The observability status of the field. Either 'not observable',
+            'rising', 'plateauing', or 'setting'.
+
+        Notes
+        -----
+        This method is called by `self.get_observability()`.
         """
 
-        if isinstance(obs_window, list):
-            self.obs_windows += obs_window
+        # never observable during night:
+        if not np.any(observable):
+            status = 'not observable'
+
+        # observable all night:
+        elif observable[0] and observable[-1]:
+            status = 'plateauing'
+
+        # observable from start of the night:
+        elif observable[0]:
+            status = 'setting'
+
+        # observable until end of the night:
+        elif observable[-1]:
+            status = 'rising'
+
+        # observable during the night:
         else:
-            self.obs_windows.append(obs_window)
+            status = 'plateauing'
+
+        return status
 
     #--------------------------------------------------------------------------
-    def set_status(
-            self, rising=None, plateauing=None, setting=None, setting_in=None,
-            not_available=None):
-        """Set the field status.
+    def get_observability(
+            self, telescope, frame, time_sunrise, refine):
+        """Calculate time windows when the field is observable.
 
         Parameters
         ----------
-        rising : bool, optional
-            True, if the field is rising. The default is None.
-        plateauing : bool, optional
-            True, if the field is neither rising nor setting. The default is
-            None.
-        setting : bool, optional
-            True, if the field is setting. The default is None.
-        setting_in : astropy.unit.Quantity, optional
-            The duration until the field is setting. The default is None.
-        not_available : bool, optional
-            True, if the status is unknown. The default is None.
+        telescope : Telescope
+            Telescope for which to calculate observability.
+        frame : astropy.coordinates.AltAz
+            Frame that provides the time steps at which observability is
+            initially tested.
+        time_sunrise : astropy.time.Time
+            Date and time of sunrise.
+        refine : astropy.time.TimeDelta
+            Time accuracy at which the observing window is calculated. The
+            precision of the observable time window is refined to this value.
+            I.e. if the interval given in 'frame' is 10 minutes and refine
+            is a TimeDelta corresponding to 1 minute, the window limits will
+            be accurate to a minute.
 
         Returns
         -------
-        None.
+        obs_windows : list
+            List of tuples. Each tuple contains two astropy.time.Time instances
+            that mark the earliest time and latest time of a window during
+            which the field is observable.
+        obs_status : str
+            The observability status of the field. Either 'not observable',
+            'rising', 'plateauing', or 'setting'.
+
+        Notes
+        -----
+        This method calls `self._get_obs_windows()` and
+        `self._get_observability_status()`.
         """
 
-        if not_available:
-            self.status = -1
-        elif rising:
-            self.status = 1
-        elif plateauing:
-            self.status = 2
-        elif setting:
-            self.status = 3
-            self.setting_in = setting_in
+        observable, observable_hard, __ = telescope.constraints.get(
+                self.center_coord, frame)
+        obs_windows = self._get_obs_window(
+                observable, telescope, frame, time_sunrise, refine)
+        obs_status = self._get_observability_status(observable_hard)
 
-    #--------------------------------------------------------------------------
-    def set_priority(self, priority):
-        """Set priority.
-
-        Parameters
-        ----------
-        priority : float
-            Priority value assigned to this field.
-
-        Returns
-        -------
-        None
-        """
-
-        self.priority = priority
+        return obs_windows, obs_status
 
 #==============================================================================
 
@@ -2019,10 +1933,10 @@ class ObservabilityPlanner:
                     time_interval_init, time_interval_refine, agreed_to_gaps)
 
         # determine observability status for each field for each day:
-        self._add_status(
-                days_before, days_after, outlier_threshold,
-                status_threshold, time_interval_refine,
-                batch_write=batch_write, processes=processes)
+        #self._add_status(
+        #        days_before, days_after, outlier_threshold,
+        #        status_threshold, time_interval_refine,
+        #        batch_write=batch_write, processes=processes)
 
 #==============================================================================
 
