@@ -4284,7 +4284,6 @@ class DBCreator(DBManager):
             query = """\
                 INSERT INTO ObservabilityStatus (status)
                 VALUES
-                    ('init'),
                     ('not observable'),
                     ('rising'),
                     ('plateauing'),
