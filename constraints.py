@@ -19,147 +19,21 @@ __email__ = "skiehlmann@mail.de"
 __status__ = "Production"
 
 #==============================================================================
-# CLASSES
-#==============================================================================
-
-class Constraints(object):
-    """List of constraints that are getting jointly evaluated.
-    """
-
-    #--------------------------------------------------------------------------
-    def __init__(self):
-        """Create Constraints instance.
-
-        Returns
-        -------
-        None
-        """
-
-        self.constraints = []
-        self.size = 0
-        self.i = 0
-
-    #--------------------------------------------------------------------------
-    def __str__(self):
-        """Returns string representation of all contained Constraint instances.
-
-        Returns
-        -------
-        text : str
-            Description of stored Constraint instances.
-        """
-
-        text = 'Set of observational constraints:\n'
-        for constraint in self.constraints:
-            text = '{0:s}* {1:s}\n'.format(text, constraint.__str__())
-
-        return text
-
-    #--------------------------------------------------------------------------
-    def __iter__(self):
-        """Make this class iterable.
-
-        Returns
-        -------
-        Constraints
-            Instance of this class.
-        """
-
-        return self
-
-    #--------------------------------------------------------------------------
-    def __next__(self):
-        """Return the next stored Constraint instance.
-
-        Returns
-        -------
-        Constraint
-            Constraint instance stored in the Constraints instance.
-        """
-
-        if self.i >= self.size:
-            raise StopIteration
-        else:
-            constraint = self.constraints[self.i]
-            self.i += 1
-
-            return constraint
-
-    #--------------------------------------------------------------------------
-    def add(self, constraint):
-        """Add a new constraint.
-
-        Parameters
-        ----------
-        constraint : constraint
-            An instance of a Constraint as defined in this module.
-
-        Raises
-        ------
-        TypeError
-            Raised if the handed constraint is not of Constraint parent-class.
-
-        Returns
-        -------
-        None
-        """
-
-        # chack if Constraint instance:
-        if not isinstance(constraint, Constraint):
-            raise TypeError('Unsupported type: {0}'.format(type(constraint)))
-
-        self.constraints.append(constraint)
-        self.size += 1
-
-    #--------------------------------------------------------------------------
-    def get(self, source_coord, frame, **kwargs):
-        """Evaluate all constraints jointly.
-
-        Parameters
-        ----------
-        source_coord : astropy.SkyCoord
-            Coordinates of the target source.
-        frame : astropy.coordinates.builtin_frames.altaz.AltAz
-            A coordinate or frame in the Altitude-Azimuth system.
-        kwargs
-            Additional keyword arguments forwarded to the constraints.
-
-        Returns
-        -------
-        numpy.ndarray
-            Array of boolean values. One entry for each input coordinate.
-            The entry is True, if the source is observable according to all
-            constraints, and False otherwise.
-        """
-
-        if len(self.constraints) == 0:
-            observable = np.ones(frame.obstime.size, dtype=bool)
-
-        elif len(self.constraints) == 1:
-            observable = self.constraints[0].get(source_coord, frame, **kwargs)
-
-        else:
-            observable = self.constraints[0].get(source_coord, frame, **kwargs)
-
-            for constraint in self.constraints[1:]:
-
-                # stop evaluating constraints, if source is not observable:
-                if not np.any(observable):
-                    break
-
-                # update observability with additional constraint, only where
-                # observable:
-                observable[observable] = constraint.get(
-                        source_coord, frame, observable, **kwargs)
-
-        return observable
-
+# ABSTRACT CLASSES
 #==============================================================================
 
 class Constraint(object, metaclass=ABCMeta):
     """Observational constraint. Defines whether a source is observable from a
     specified location at a specified time or not.
+
+    Notes
+    -----
+    Abstract class. This class should not be used directly as parent class.
+    Custom Constraint-type classes should be built from ConstraintHard or
+    ConstraintVariable classes.
     """
+
+    constraint_type = None
 
     #--------------------------------------------------------------------------
     @abstractmethod
@@ -272,7 +146,283 @@ class Constraint(object, metaclass=ABCMeta):
 
 #==============================================================================
 
-class AirmassLimit(Constraint):
+class ConstraintHard(Constraint):
+    """Hard observational constraint. Defines whether a source is observable
+    from a specified location at a specified time or not.
+
+    Notes
+    -----
+    Abstract class. This class should be used as parent class to any custom
+    hard Constraint-type classes. Hard constraints are ones whose effect on
+    fields does not change strongly from one day to another. Motion constraints
+    are hard constraints.
+    """
+
+    constraint_type = 'hard'
+
+#==============================================================================
+
+class ConstraintVariable(Constraint):
+    """Variable observational constraint. Defines whether a source is
+    observable from a specified location at a specified time or not.
+
+    Notes
+    -----
+    Abstract class. This class should be used as parent class to any custom
+    variable Constraint-type classes. Variable constraints are ones whose
+    effect on fields changes strongly from one day to another. E.g. a required
+    minimum distance from the Moon depends on the position of the Moon on the
+    sky and changes strongly from one day to another.
+    """
+
+    constraint_type = 'variable'
+
+#==============================================================================
+# CLASSES
+#==============================================================================
+
+class Constraints(object):
+    """List of constraints that are getting jointly evaluated.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self):
+        """Create Constraints instance.
+
+        Returns
+        -------
+        None
+        """
+
+        self.constraints_hard = []
+        self.constraints_var = []
+        self.size = 0
+        self.n_hard = 0
+        self.n_var = 0
+        self.i_hard = 0
+        self.i_var = 0
+
+    #--------------------------------------------------------------------------
+    def __str__(self):
+        """Returns string representation of all contained Constraint instances.
+
+        Returns
+        -------
+        text : str
+            Description of stored Constraint instances.
+        """
+
+        text = 'Set of observational constraints:\n'
+        for constraint in self.constraints:
+            text = '{0:s}* {1:s}\n'.format(text, constraint.__str__())
+
+        return text
+
+    #--------------------------------------------------------------------------
+    def __iter__(self):
+        """Make this class iterable.
+
+        Returns
+        -------
+        Constraints
+            Instance of this class.
+        """
+
+        return self
+
+    #--------------------------------------------------------------------------
+    def __next__(self):
+        """Return the next stored Constraint instance.
+
+        Returns
+        -------
+        Constraint
+            Constraint instance stored in the Constraints instance.
+        """
+
+        if self.i_hard + self.i_var >= self.size:
+            raise StopIteration
+
+        elif self.i_hard < self.n_hard:
+            constraint = self.constraints_hard[self.i_hard]
+            self.i_hard += 1
+
+        else:
+            constraint = self.constraints_var[self.i_var]
+            self.i_var += 1
+
+        return constraint
+
+    #--------------------------------------------------------------------------
+    def _evaluate_hard_constraints(self, source_coord, frame, **kwargs):
+        """Evaluate the hard constaints.
+
+        Parameters
+        ----------
+        source_coord : astropy.SkyCoord
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
+        kwargs
+            Additional keyword arguments forwarded to the constraints.
+
+        Returns
+        -------
+        numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to all
+            constraints, and False otherwise.
+        """
+
+        if self.n_hard == 0:
+            observable = np.ones(frame.obstime.size, dtype=bool)
+
+        elif self.n_hard == 1:
+            observable = self.constraints_hard[0].get(
+                    source_coord, frame, **kwargs)
+
+        else:
+            observable = self.constraints_hard[0].get(
+                    source_coord, frame, **kwargs)
+
+            for constraint in self.constraints_hard[1:]:
+
+                # stop evaluating constraints, if source is not observable:
+                if not np.any(observable):
+                    break
+
+                # update observability with additional constraint, only where
+                # observable:
+                observable[observable] = constraint.get(
+                        source_coord, frame, observable, **kwargs)
+
+        return observable
+
+    #--------------------------------------------------------------------------
+    def _evaluate_variable_constraints(self, source_coord, frame, **kwargs):
+        """Evaluate the variable constaints.
+
+        Parameters
+        ----------
+        source_coord : astropy.SkyCoord
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
+        kwargs
+            Additional keyword arguments forwarded to the constraints.
+
+        Returns
+        -------
+        numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to all
+            constraints, and False otherwise.
+        """
+
+        if self.n_var == 0:
+            observable = np.ones(frame.obstime.size, dtype=bool)
+
+        elif self.n_var == 1:
+            observable = self.constraints_var[0].get(
+                    source_coord, frame, **kwargs)
+
+        else:
+            observable = self.constraints_var[0].get(
+                    source_coord, frame, **kwargs)
+
+            for constraint in self.constraints_var[1:]:
+
+                # stop evaluating constraints, if source is not observable:
+                if not np.any(observable):
+                    break
+
+                # update observability with additional constraint, only where
+                # observable:
+                observable[observable] = constraint.get(
+                        source_coord, frame, observable, **kwargs)
+
+        return observable
+
+    #--------------------------------------------------------------------------
+    def add(self, constraint):
+        """Add a new constraint.
+
+        Parameters
+        ----------
+        constraint : constraint
+            An instance of a Constraint as defined in this module.
+
+        Raises
+        ------
+        TypeError
+            Raised if the handed `constraint` is not of Constraint-type.
+            Raised if the handed `constraint` does not have `constraint_type`
+            attribute value 'hard' or 'variable'.
+
+        Returns
+        -------
+        None
+        """
+
+        # check if Constraint instance:
+        if not isinstance(constraint, Constraint):
+            raise TypeError('Unsupported type: {0}'.format(type(constraint)))
+
+        # store constraint:
+        if constraint.constraint_type == 'hard':
+            self.constraints_hard.append(constraint)
+            self.n_hard += 1
+
+        elif constraint.constraint_type == 'variable':
+            self.constraints_var.append(constraint)
+            self.n_var += 1
+
+        else:
+            raise ValueError(
+                "`constraint` has unsupported constraint_type value.")
+
+        self.size += 1
+
+    #--------------------------------------------------------------------------
+    def get(self, source_coord, frame, **kwargs):
+        """Evaluate all constraints jointly.
+
+        Parameters
+        ----------
+        source_coord : astropy.SkyCoord
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
+        kwargs
+            Additional keyword arguments forwarded to the constraints.
+
+        Returns
+        -------
+        numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to all
+            constraints, and False otherwise.
+        numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to the
+            hard constraints, and False otherwise.
+        numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to the
+            variable constraints, and False otherwise.
+        """
+
+        observable_hard = self._evaluate_hard_constraints(
+                source_coord, frame, **kwargs)
+        observable_var = self._evaluate_variable_constraints(
+                source_coord, frame, **kwargs)
+        observable = np.logical_and(observable_hard, observable_var)
+
+        return observable, observable_hard, observable_var
+
+#==============================================================================
+
+class AirmassLimit(ConstraintHard):
     """Airmass limit: only sources below a specified airmass are observable.
     """
 
@@ -364,7 +514,7 @@ class AirmassLimit(Constraint):
 
 #==============================================================================
 
-class ElevationLimit(Constraint):
+class ElevationLimit(ConstraintHard):
     """Elevation limit: only sources above a specified elevation are
     observable.
     """
@@ -445,7 +595,7 @@ class ElevationLimit(Constraint):
 
 #==============================================================================
 
-class HourangleLimit(Constraint):
+class HourangleLimit(ConstraintHard):
     """Hourangle limit: only sources within a specific hourangle limit are
     observable.
     """
@@ -551,233 +701,7 @@ class HourangleLimit(Constraint):
 
 #==============================================================================
 
-class MoonDistance(Constraint):
-    """Only sources sufficiently separated from the Moon are observable.
-    """
-
-    #--------------------------------------------------------------------------
-    def __init__(self, limit):
-        """Create MoonDistance instance.
-
-        Parameters
-        ----------
-        limit : float
-            Minimum required angular separation between targets and the Moon in
-            degrees.
-
-        Returns
-        -------
-        None
-        """
-
-        self.limit = limit * u.deg
-        self.last_frame = None
-        self.moon_altaz = None
-
-    #--------------------------------------------------------------------------
-    def __str__(self):
-        """Description of the class instance and its parameters.
-
-        Returns
-        -------
-        str
-            Description of the class instance and its parameters.
-        """
-
-        return 'Moon distance: {0:.2f}'.format(self.limit)
-
-    #--------------------------------------------------------------------------
-    def get(self, source_coord, frame, sel=None, check_frame=True, **kwargs):
-        """Evaluate the constraint for a given target, a specific location and
-        time.
-
-        Parameters
-        ----------
-        source_coord : astropy.SkyCoord
-            Coordinates of the target source.
-        frame : astropy.coordinates.builtin_frames.altaz.AltAz
-            A coordinate or frame in the Altitude-Azimuth system.
-        sel : np.ndarray or None, optional
-            If not None, the array must be of boolean type. The constraint is
-            evaluated only for times where this array is True. The default is
-            None.
-        check_frame : bool, optional
-            If True, the frame is compared to the previously saved frame and
-            the saved Moon position is used, if the frames are identical;
-            otherwise the Moon position is calculated and saved with the
-            current frame. If False, the saved Moon position is not used and
-            the saved frame is not overwritten.The default is True.
-        kwargs
-            Used to catch keyword argmuments that are relevant to other
-            constraint classes.
-
-        Returns
-        -------
-        out : numpy.ndarray
-            Array of boolean values. One entry for each input coordinate.
-            The entry is True, if the source is observable according to the
-            constraint, and False otherwise.
-        """
-
-        # compare with saved frame:
-        if check_frame:
-            # if frame is the same as before re-use Moon positions:
-            if self._same_frame(frame):
-                moon_altaz = self.moon_altaz
-            # otherwise calculate new Moon positions:
-            else:
-                moon_altaz = \
-                        get_body('moon', frame.obstime).transform_to(frame)
-                self.moon_altaz = moon_altaz
-                self.last_frame = frame
-
-        # ignore saved frame:
-        else:
-            moon_altaz = get_body('moon', frame.obstime).transform_to(frame)
-
-        if sel is not None:
-            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
-            moon_altaz = moon_altaz[sel]
-
-        source_altaz = source_coord.transform_to(frame)
-        separation = source_altaz.separation(moon_altaz)
-        observable = separation > self.limit
-
-        return observable
-
-    #--------------------------------------------------------------------------
-    def get_params(self):
-        """Returns the constraint parameters.
-
-        Returns
-        -------
-        dict
-            Constraint parameters.
-        """
-
-        params = {'limit': self.limit.value}
-
-        return params
-
-#==============================================================================
-
-class MoonPolarization(Constraint):
-    """Avoid polarized, scattered Moon light. Target sources in a specified
-    angular range around 90 degrees separation from the Moon are not
-    observable.
-    """
-
-    #--------------------------------------------------------------------------
-    def __init__(self, limit):
-        """Create MoonPolarization instance.
-
-        Parameters
-        ----------
-        limit : float
-            Angular range to avoid polarized, scattered Moon light. Sources
-            within the range (90-limit, 90+limit) degrees separation from the
-            Moon are not observable.
-
-        Returns
-        -------
-        None
-        """
-
-        self.limit = limit * u.deg
-        self.limit_lo = (90. - limit) * u.deg
-        self.limit_hi = (90. + limit) * u.deg
-        self.last_frame = None
-        self.moon_altaz = None
-
-    #--------------------------------------------------------------------------
-    def __str__(self):
-        """Description of the class instance and its parameters.
-
-        Returns
-        -------
-        str
-            Description of the class instance and its parameters.
-        """
-
-        return 'Moon polarization: {0:.2f}'.format(self.limit)
-
-    #--------------------------------------------------------------------------
-    def get(self, source_coord, frame, sel=None, check_frame=True, **kwargs):
-        """Evaluate the constraint for a given target, a specific location and
-        time.
-
-        Parameters
-        ----------
-        source_coord : astropy.SkyCoord
-            Coordinates of the target source.
-        frame : astropy.coordinates.builtin_frames.altaz.AltAz
-            A coordinate or frame in the Altitude-Azimuth system.
-        sel : np.ndarray or None, optional
-            If not None, the array must be of boolean type. The constraint is
-            evaluated only for times where this array is True. The default is
-            None.
-        check_frame : bool
-            If True, the frame is compared to the previously saved frame and
-            the saved Moon position is used, if the frames are identical;
-            otherwise the Moon position is calculated and saved with the
-            current frame. If False, the saved Moon position is not used and
-            the saved frame is not overwritten.The default is True.
-        kwargs
-            Used to catch keyword argmuments that are relevant to other
-            constraint classes.
-
-        Returns
-        -------
-        out : numpy.ndarray
-            Array of boolean values. One entry for each input coordinate.
-            The entry is True, if the source is observable according to the
-            constraint, and False otherwise.
-        """
-
-        # compare with saved frame:
-        if check_frame:
-            # if frame is the same as before re-use Moon positions:
-            if self._same_frame(frame):
-                moon_altaz = self.moon_altaz
-            # otherwise calculate new Moon positions:
-            else:
-                moon_altaz = \
-                        get_body('moon', frame.obstime).transform_to(frame)
-                self.moon_altaz = moon_altaz
-                self.last_frame = frame
-
-        # ignore saved frame:
-        else:
-            moon_altaz = get_body('moon', frame.obstime).transform_to(frame)
-
-        if sel is not None:
-            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
-            moon_altaz = moon_altaz[sel]
-
-        source_altaz = source_coord.transform_to(frame)
-        separation = source_altaz.separation(moon_altaz)
-        observable = np.logical_or(
-                separation <= self.limit_lo, separation >= self.limit_hi)
-
-        return observable
-
-    #--------------------------------------------------------------------------
-    def get_params(self):
-        """Returns the constraint parameters.
-
-        Returns
-        -------
-        dict
-            Constraint parameters.
-        """
-
-        params = {'limit': self.limit.value}
-
-        return params
-
-#==============================================================================
-
-class PolyHADecLimit(Constraint):
+class PolyHADecLimit(ConstraintHard):
     """Limits on the hourangle and declination defined by a polygon that
     encapsulates the allowed region.
     """
@@ -1001,7 +925,233 @@ class PolyHADecLimit(Constraint):
 
 #==============================================================================
 
-class SunDistance(Constraint):
+class MoonDistance(ConstraintVariable):
+    """Only sources sufficiently separated from the Moon are observable.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, limit):
+        """Create MoonDistance instance.
+
+        Parameters
+        ----------
+        limit : float
+            Minimum required angular separation between targets and the Moon in
+            degrees.
+
+        Returns
+        -------
+        None
+        """
+
+        self.limit = limit * u.deg
+        self.last_frame = None
+        self.moon_altaz = None
+
+    #--------------------------------------------------------------------------
+    def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        str
+            Description of the class instance and its parameters.
+        """
+
+        return 'Moon distance: {0:.2f}'.format(self.limit)
+
+    #--------------------------------------------------------------------------
+    def get(self, source_coord, frame, sel=None, check_frame=True, **kwargs):
+        """Evaluate the constraint for a given target, a specific location and
+        time.
+
+        Parameters
+        ----------
+        source_coord : astropy.SkyCoord
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
+        sel : np.ndarray or None, optional
+            If not None, the array must be of boolean type. The constraint is
+            evaluated only for times where this array is True. The default is
+            None.
+        check_frame : bool, optional
+            If True, the frame is compared to the previously saved frame and
+            the saved Moon position is used, if the frames are identical;
+            otherwise the Moon position is calculated and saved with the
+            current frame. If False, the saved Moon position is not used and
+            the saved frame is not overwritten.The default is True.
+        kwargs
+            Used to catch keyword argmuments that are relevant to other
+            constraint classes.
+
+        Returns
+        -------
+        out : numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to the
+            constraint, and False otherwise.
+        """
+
+        # compare with saved frame:
+        if check_frame:
+            # if frame is the same as before re-use Moon positions:
+            if self._same_frame(frame):
+                moon_altaz = self.moon_altaz
+            # otherwise calculate new Moon positions:
+            else:
+                moon_altaz = \
+                        get_body('moon', frame.obstime).transform_to(frame)
+                self.moon_altaz = moon_altaz
+                self.last_frame = frame
+
+        # ignore saved frame:
+        else:
+            moon_altaz = get_body('moon', frame.obstime).transform_to(frame)
+
+        if sel is not None:
+            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
+            moon_altaz = moon_altaz[sel]
+
+        source_altaz = source_coord.transform_to(frame)
+        separation = source_altaz.separation(moon_altaz)
+        observable = separation > self.limit
+
+        return observable
+
+    #--------------------------------------------------------------------------
+    def get_params(self):
+        """Returns the constraint parameters.
+
+        Returns
+        -------
+        dict
+            Constraint parameters.
+        """
+
+        params = {'limit': self.limit.value}
+
+        return params
+
+#==============================================================================
+
+class MoonPolarization(ConstraintVariable):
+    """Avoid polarized, scattered Moon light. Target sources in a specified
+    angular range around 90 degrees separation from the Moon are not
+    observable.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, limit):
+        """Create MoonPolarization instance.
+
+        Parameters
+        ----------
+        limit : float
+            Angular range to avoid polarized, scattered Moon light. Sources
+            within the range (90-limit, 90+limit) degrees separation from the
+            Moon are not observable.
+
+        Returns
+        -------
+        None
+        """
+
+        self.limit = limit * u.deg
+        self.limit_lo = (90. - limit) * u.deg
+        self.limit_hi = (90. + limit) * u.deg
+        self.last_frame = None
+        self.moon_altaz = None
+
+    #--------------------------------------------------------------------------
+    def __str__(self):
+        """Description of the class instance and its parameters.
+
+        Returns
+        -------
+        str
+            Description of the class instance and its parameters.
+        """
+
+        return 'Moon polarization: {0:.2f}'.format(self.limit)
+
+    #--------------------------------------------------------------------------
+    def get(self, source_coord, frame, sel=None, check_frame=True, **kwargs):
+        """Evaluate the constraint for a given target, a specific location and
+        time.
+
+        Parameters
+        ----------
+        source_coord : astropy.SkyCoord
+            Coordinates of the target source.
+        frame : astropy.coordinates.builtin_frames.altaz.AltAz
+            A coordinate or frame in the Altitude-Azimuth system.
+        sel : np.ndarray or None, optional
+            If not None, the array must be of boolean type. The constraint is
+            evaluated only for times where this array is True. The default is
+            None.
+        check_frame : bool
+            If True, the frame is compared to the previously saved frame and
+            the saved Moon position is used, if the frames are identical;
+            otherwise the Moon position is calculated and saved with the
+            current frame. If False, the saved Moon position is not used and
+            the saved frame is not overwritten.The default is True.
+        kwargs
+            Used to catch keyword argmuments that are relevant to other
+            constraint classes.
+
+        Returns
+        -------
+        out : numpy.ndarray
+            Array of boolean values. One entry for each input coordinate.
+            The entry is True, if the source is observable according to the
+            constraint, and False otherwise.
+        """
+
+        # compare with saved frame:
+        if check_frame:
+            # if frame is the same as before re-use Moon positions:
+            if self._same_frame(frame):
+                moon_altaz = self.moon_altaz
+            # otherwise calculate new Moon positions:
+            else:
+                moon_altaz = \
+                        get_body('moon', frame.obstime).transform_to(frame)
+                self.moon_altaz = moon_altaz
+                self.last_frame = frame
+
+        # ignore saved frame:
+        else:
+            moon_altaz = get_body('moon', frame.obstime).transform_to(frame)
+
+        if sel is not None:
+            frame = AltAz(location=frame.location, obstime=frame.obstime[sel])
+            moon_altaz = moon_altaz[sel]
+
+        source_altaz = source_coord.transform_to(frame)
+        separation = source_altaz.separation(moon_altaz)
+        observable = np.logical_or(
+                separation <= self.limit_lo, separation >= self.limit_hi)
+
+        return observable
+
+    #--------------------------------------------------------------------------
+    def get_params(self):
+        """Returns the constraint parameters.
+
+        Returns
+        -------
+        dict
+            Constraint parameters.
+        """
+
+        params = {'limit': self.limit.value}
+
+        return params
+
+#==============================================================================
+
+class SunDistance(ConstraintVariable):
     """Only sources sufficiently separated from the Sun are observable.
     """
 
