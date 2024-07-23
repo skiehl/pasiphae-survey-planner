@@ -392,12 +392,14 @@ class Telescope:
 
         Parameters
         -----
-        lat : str or astropy.Angle
+        lat : float, str or astropy.Angle
             Latitude of telescope location. String input needs to be consistent
-            with astropy.Angle definition.
-        lon : str or astropy.Angle
+            with astropy.Angle definition. Float input is expected to be in
+            radians.
+        lon : float, str or astropy.Angle
             Longitude of telescope location. String input needs to be
-            consistent with astropy.Angle definition.
+            consistent with astropy.Angle definition. Float input is expected
+            to be in radians.
         height : float
             Height of telescope location in meters.
         utc_offset : float
@@ -407,13 +409,37 @@ class Telescope:
         telescope_id : int
             ID in the database.
 
+        Raises
+        ------
+        ValueError
+            Raised, if `lat` or `lon` is neither float, nor str, nor
+            astropy.Angle.
+
         Returns
         -----
         None
         """
 
-        lat = Angle(lat)
-        lon = Angle(lon)
+        if isinstance(lat, float):
+            lat = Angle(lat, unit='rad')
+        elif isinstance(lat, str):
+            lat = Angle(lat)
+        elif isinstance(lat, Angle):
+            pass
+        else:
+            raise ValueError(
+                    "`lat` must be float (in radians), str, or astropy.Angle.")
+
+        if isinstance(lon, float):
+            lon = Angle(lon, unit='rad')
+        elif isinstance(lon, str):
+            lon = Angle(lon)
+        elif isinstance(lon, Angle):
+            pass
+        else:
+            raise ValueError(
+                    "`lon` must be float (in radians), str, or astropy.Angle.")
+
         height = height * u.m
 
         self.loc = EarthLocation(
