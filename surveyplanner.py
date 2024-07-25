@@ -36,7 +36,7 @@ class Field:
     """A field in the sky."""
 
     #--------------------------------------------------------------------------
-    def __init__(self, center_ra, center_dec):
+    def __init__(self, field_id, center_ra, center_dec, jd_next):
         """A field in the sky.
 
         Parameters
@@ -45,16 +45,20 @@ class Field:
             Right ascension of the field center in radians.
         center_dec : float
             Declination of the field center in radians.
+        jd_next : float
+            The next JD for which observability need to be calculated.
 
         Returns
         -------
         None
         """
 
+        self.field_id = field_id
         self.center_coord = SkyCoord(center_ra, center_dec, unit='rad')
+        self.jd_next = jd_next
 
     #--------------------------------------------------------------------------
-    def _get_obs_window(
+    def _get_obs_windows(
             self, observable, telescope, frame, time_sunrise, refine):
         """Calculate time windows when the field is observable.
 
@@ -86,10 +90,10 @@ class Field:
 
         Notes
         -----
-        This method uses a frame as input instead of a start and stop time
-        and interval, from which the frame could be created. The advantage is
-        that the same initial frame can be used for all fields.
-        This method is called by `self.get_observability()`.
+        - This method uses a frame as input instead of a start and stop time
+          and interval, from which the frame could be created. The advantage is
+          that the same initial frame can be used for all fields.
+        - This method is called by `self.get_observability()`.
         """
 
         obs_windows = []
@@ -160,12 +164,16 @@ class Field:
         return obs_windows
 
     #--------------------------------------------------------------------------
-    def _get_observability_status(self, observable):
+    def _get_observability_status(self, observable, observable_hard):
         """Determine the observability status of the field.
 
         Parameters
         ----------
         observable : numpy.ndarray
+            Boolean-type array, where True marks when the field is observable
+            and False marks when it is not observable, according to all
+            constraints.
+        observable_hard : numpy.ndarray
             Boolean-type array, where True marks when the field is observable
             and False marks when it is not observable, according to the hard
             constraints.
@@ -186,15 +194,15 @@ class Field:
             status = 'not observable'
 
         # observable all night:
-        elif observable[0] and observable[-1]:
+        elif observable_hard[0] and observable_hard[-1]:
             status = 'plateauing'
 
         # observable from start of the night:
-        elif observable[0]:
+        elif observable_hard[0]:
             status = 'setting'
 
         # observable until end of the night:
-        elif observable[-1]:
+        elif observable_hard[-1]:
             status = 'rising'
 
         # observable during the night:
@@ -242,9 +250,10 @@ class Field:
 
         observable, observable_hard, __ = telescope.constraints.get(
                 self.center_coord, frame)
-        obs_windows = self._get_obs_window(
+        obs_windows = self._get_obs_windows(
                 observable, telescope, frame, time_sunrise, refine)
-        obs_status = self._get_observability_status(observable_hard)
+        obs_status = self._get_observability_status(
+                observable, observable_hard)
 
         return obs_windows, obs_status
 
@@ -621,20 +630,10 @@ class ObservabilityPlanner:
         """
 
         field_id = field_dict['field_id']
-        fov = field_dict['fov']
         center_ra = field_dict['center_ra']
         center_dec = field_dict['center_dec']
-        tilt = field_dict['tilt']
-        jd_first = field_dict['jd_first']
         jd_next = field_dict['jd_next']
-        n_obs_tot = field_dict['nobs_tot']
-        n_obs_done = field_dict['nobs_done']
-        n_obs_pending = field_dict['nobs_pending']
-        field = Field(
-            fov, center_ra, center_dec, tilt, field_id=field_id,
-            jd_first_observability=jd_first, jd_next_observability=jd_next,
-            n_obs_tot=n_obs_tot, n_obs_done=n_obs_done,
-            n_obs_pending=n_obs_pending)
+        field = Field(field_id, center_ra, center_dec, jd_next)
 
         return field
 
@@ -656,7 +655,7 @@ class ObservabilityPlanner:
 
         # create telescope:
         self.telescope = Telescope(
-                telescope['lat']*u.rad, telescope['lon']*u.rad,
+                telescope['lat'], telescope['lon'],
                 telescope['height'], telescope['utc_offset'],
                 name=telescope['name'])
         parameter_set_id = telescope['parameter_set_id']
@@ -848,7 +847,7 @@ class ObservabilityPlanner:
         return jd_start, jd_stop, n_days, agreed_to_gaps
 
     #--------------------------------------------------------------------------
-    def _read_obs_windows_from_queue(
+    def _read_obs_from_queue(
             self, db, queue_obs_windows, n, duration_limit):
         """Read results from the queues to be written to the database.
 
@@ -859,8 +858,8 @@ class ObservabilityPlanner:
         queue_obs_windows : multiprocessing.managers.AutoProxy[Queue]
             Queue containing the observing windows.
         queue_field_ids : multiprocessing.managers.AutoProxy[Queue]
-            Queue containing the IDs of fields whose `jd_next_observability`
-            value needs to be updated.
+            Queue containing the IDs of fields whose `jd_next` value needs to
+            be updated.
         n : int
             Number of entries to read from the queue.
         duration_limit : astropy.time.TimeDelta
@@ -871,7 +870,7 @@ class ObservabilityPlanner:
         -------
         batch_field_ids : list of int
             IDs of the fields for Observability table entries and updating
-            `jd_next_observability` value.
+            `jd_next` value.
         batch_dates : list of float
             Current JD for Observability table entries.
         batch_status : list of str
@@ -912,9 +911,8 @@ class ObservabilityPlanner:
         observability_id = db.get_next_observability_id()
 
         for __ in range(n):
-            field_id, obs_windows = queue_obs_windows.get()
+            field_id, obs_windows, obs_status = queue_obs_windows.get()
             batch_field_ids.append(field_id)
-            observable = False
 
             for start, stop in obs_windows:
                 duration = (stop - start)
@@ -925,13 +923,8 @@ class ObservabilityPlanner:
                     batch_obs_windows_start.append(start)
                     batch_obs_windows_stop.append(stop)
                     batch_obs_windows_duration.append(duration)
-                    observable = True
 
-            if observable:
-                batch_status.append('init')
-            else:
-                batch_status.append('not observable')
-
+            batch_status.append(obs_status)
             observability_id += 1
 
         return (batch_field_ids, batch_status, batch_obs_windows_field_ids,
@@ -997,7 +990,7 @@ class ObservabilityPlanner:
                 batch_field_ids, batch_status, \
                 batch_obs_windows_field_ids, batch_obs_windows_obs_ids, \
                 batch_obs_windows_start, batch_obs_windows_stop, \
-                batch_obs_windows_duration = self._read_obs_windows_from_queue(
+                batch_obs_windows_duration = self._read_obs_from_queue(
                         db, queue_obs_windows, batch_write, duration_limit)
                 n_queried = len(batch_field_ids)
                 write = True
@@ -1077,14 +1070,14 @@ class ObservabilityPlanner:
         """
 
         # skip if this field was already covered for this JD:
-        if not init and field.jd_next_observability > jd:
+        if not init and field.jd_next > jd:
             pass
 
         # get observing windows and add them to queue:
         else:
-            obs_windows = field.get_obs_window(
+            obs_windows, obs_status = field.get_observability(
                     self.telescope, frame, time_sunrise, refine=refine)
-            queue_obs_windows.put((field.id, obs_windows))
+            queue_obs_windows.put((field.field_id, obs_windows, obs_status))
 
         with counter_lock:
             counter.value += 1
@@ -1182,7 +1175,7 @@ class ObservabilityPlanner:
 
         # add start JD to database for new fields:
         if init:
-            field_ids = [field.id for field in fields]
+            field_ids = [field.field_id for field in fields]
             db.init_observability_jd(field_ids, parameter_set_id, jd_start)
 
         print(f'Calculate observing windows for {n_days} days..')
@@ -1225,94 +1218,86 @@ class ObservabilityPlanner:
         return agreed_to_gaps
 
     #--------------------------------------------------------------------------
-    def _get_fields_missing_status(self):
-        """Get fields that have associated observing windows without
-        observability status information.
+    def _get_fields_missing_setting_duration(self):
+        """Get fields where the setting duration for some dates is missing.
 
         Returns
         -------
         field_ids : numpy.ndarray
-            Field IDs of fields with missing observing status.
+            Field IDs of fields with missing setting durations.
         jd_min : numpy.ndarray
-            JD of the first missing observing status corresponding to each
+            JD of the first missing setting duration corresponding to each
             field.
         jd_max : numpy.ndarray
-            JD of the last missing observing status corresponding to each
+            JD of the last missing setting duration corresponding to each
             field.
+        jd_done : numpy.ndarray
+            The JD until which observabilities have been calculated
+            corresponding to each field.
 
         Notes
         -----
-        - This method is called by `_add_status()`
+        - This method is called by `_add_setting_durations()`.
         """
 
         db = FieldManager(self.dbname)
-        fields = db.get_fields_missing_status()
-        fields = DataFrame(fields, columns=('field_id', 'jd'))
+        fields = db.get_fields_missing_setting_duration()
+        fields = DataFrame(fields)
+        f = lambda x : x.iloc[0]
         fields = fields.groupby('field_id').agg(
-                jd_min=('jd', 'min'), jd_max=('jd', 'max'))
+                jd_min=('jd', 'min'), jd_max=('jd', 'max'),
+                jd_next=('jd_next', f))
         field_ids = fields.index.to_numpy()
         jd_min = fields['jd_min'].to_numpy()
         jd_max = fields['jd_max'].to_numpy()
+        jd_done = fields['jd_next'].to_numpy() - 1
 
-        return field_ids, jd_min, jd_max
+        return field_ids, jd_min, jd_max, jd_done
 
     #--------------------------------------------------------------------------
-    def _read_status_from_queue(self, db, queue_status, n, status_to_id):
+    def _read_setting_duration_from_queue(self, db, queue, n):
         """Read results from the queues to be written to the database.
 
         Parameters
         ----------
         db : db.DBConnectorSQLite
             Active database connection.
-        queue_status : multiprocessing.managers.AutoProxy[Queue]
-            Queue containing the observability status.
+        queue : multiprocessing.managers.AutoProxy[Queue]
+            Queue containing the setting durations.
         n : int
             Number of entries to read from the queue.
-        status_to_id : dict
-            Dictionary for conversion from status to corresponding ID.
 
         Returns
         -------
         batch_observability_ids : list of int
             IDs of the observability entries that need to be modified.
-        batch_status : list of str
-            IDs of the status of each observability entry.
-        batch_setting_in : list of float
+        batch_setting_durations : list of float
             Duration in days until the source is setting.
 
         Notes
         -----
-        - This method is called by `_update_status_in_db()`.
+        - This method is called by `_update_stetting_duration_in_db()`.
         """
 
         # data storage for Observability table columns:
         batch_observability_ids = []
-        batch_status = []
-        batch_setting_in = []
+        batch_setting_durations = []
 
-        n_queued = queue_status.qsize()
+        n_queued = queue.qsize()
 
         if n_queued < n:
             n = n_queued
 
-        # get next observability_id:
-        observability_id = db.get_next_observability_id()
-
         for __ in range(n):
-            observability_id, status, setting_in = queue_status.get()
+            observability_id, setting_duration = queue.get()
             batch_observability_ids.append(observability_id)
-            batch_status.append(status_to_id[status])
-            if np.isnan(setting_in):
-                batch_setting_in.append(None)
-            else:
-                batch_setting_in.append(setting_in)
+            batch_setting_durations.append(setting_duration)
 
-        return (batch_observability_ids, batch_status,
-                batch_setting_in)
+        return (batch_observability_ids, batch_setting_durations)
 
     #--------------------------------------------------------------------------
-    def _update_status_in_db(
-            self, db, counter, queue_status, n_tbd, batch_write):
+    def _update_setting_durations_in_db(
+            self, db, counter, queue, n_tbd, batch_write):
         """Read observability status from queue and add it to database.
 
         Parameters
@@ -1321,8 +1306,8 @@ class ObservabilityPlanner:
             Active database connection.
         counter : multiprocessing.managers.ValueProxy
             Counter that stores how many fields have been processed.
-        queue_status : multiprocessing.managers.AutoProxy[Queue]
-            Queue containing the observability status.
+        queue : multiprocessing.managers.AutoProxy[Queue]
+            Queue containing the setting durations.
         n_tbd : int
             Number of observabilities whose calculated status needs to be
             written to the database.
@@ -1337,16 +1322,13 @@ class ObservabilityPlanner:
         Notes
         -----
         - This method is running in a separate process started by
-          `_add_status()`.
+          `_add_setting_durations()`.
         """
-
-        # status string to status ID converter:
-        status_to_id = db.status_to_id_converter()
 
         while True:
             sleep(1)
             n_done = counter.value
-            n_queued = queue_status.qsize()
+            n_queued = queue.qsize()
 
             if n_done >= n_tbd and n_queued == 0:
                 break
@@ -1360,9 +1342,9 @@ class ObservabilityPlanner:
                 print(f'\rCalculations: {n_done}/{n_tbd} ' \
                       f'({n_done/n_tbd*100:.1f}%). Queued: {n_queued}. ' \
                       f'Reading from queue..                     ', end='')
-                batch_observability_ids, batch_status, \
-                batch_setting_in = self._read_status_from_queue(
-                        db, queue_status, batch_write, status_to_id)
+                batch_observability_ids, batch_setting_durations \
+                = self._read_setting_duration_from_queue(
+                        db, queue, batch_write)
                 n_queried = len(batch_observability_ids)
                 write = True
 
@@ -1376,9 +1358,8 @@ class ObservabilityPlanner:
                       f'Writing {n_queried} entries to database..', end='')
 
                 # update observabilities in database:
-                db.update_observability_status(
-                        batch_observability_ids, batch_status,
-                        batch_setting_in)
+                db.update_setting_durations(
+                        batch_observability_ids, batch_setting_durations)
 
                 n_done += n_queried
 
@@ -1386,7 +1367,7 @@ class ObservabilityPlanner:
               '                        ')
 
     #--------------------------------------------------------------------------
-    def _get_obs_window_durations(self, db, field_id, jd_start, jd_stop):
+    def _get_obs_window_durations(self, db, field_id, jd_from, jd_to):
         """Get observability window durations of a specific field between two
         dates.
 
@@ -1396,205 +1377,38 @@ class ObservabilityPlanner:
             Active database connection.
         field_id : int
             Field ID.
-        jd_start : float
+        jd_from : float
             Query observing windows from this JD on.
-        jd_stop : float
+        jd_to : float
             Query observing windows up to this JD.
 
         Returns
         -------
         durations : pandas.DataFrame
             Containts the queried durations and columns for further processing.
+
+        Notes
+        -----
+        - This method is called by `_get_setting_duration_for_field()`.
         """
 
-        durations = db.get_obs_window_durations(field_id, jd_start, jd_stop)
-        durations = DataFrame(
-                durations, columns=(
-                    'observability_id', 'jd', 'status', 'duration')
-                )
-        durations = durations.groupby(
-                ['observability_id', 'jd', 'status']).sum()
+        durations = db.get_obs_window_durations(field_id, jd_from, jd_to)
+        durations = DataFrame(durations)
+        f = lambda x : x.iloc[0]
+        durations = durations.groupby('observability_id').agg(
+                jd=('jd', f), status=('status', f),
+                duration=('duration', 'sum'),
+                setting_duration=('setting_duration', f))
         durations.reset_index(inplace=True)
-        durations['setting_in'] = \
-                np.zeros(durations.shape[0]) * np.nan
-        durations['update'] = np.zeros(durations.shape[0], dtype=bool)
 
         return durations
 
     #--------------------------------------------------------------------------
-    def _detect_outliers(self, jd, duration, outlier_threshold=0.6):
-        """Outlier detection using Cook's distance.
-
-        Parameters
-        ----------
-        jd : array-like
-            JD.
-        duration : array-like
-            Durations of the observing windows for each JD.
-        outlier_threshold : float, optional
-            Threshold for outlier detection. Data points with a Cook's distance
-            p-value lower than this threshold are considered outliers. The
-            default is 0.6.
-
-        Returns
-        -------
-        outliers : numpy.ndarray (dtype: bool)
-            True, for detected outliers. False, otherwise.
-
-        Notes
-        -----
-        - This method is called by `_update_status_for_field()`.
-        """
-
-        x = np.asarray(jd)
-        y = np.asarray(duration)
-
-        # linear regression:
-        x = add_constant(x)
-        model = OLS(y, x).fit()
-
-        # check for outliers:
-        influence = model.get_influence()
-        __, cooks_pval = influence.cooks_distance
-        outliers = cooks_pval < outlier_threshold
-
-        return outliers
-
-    #--------------------------------------------------------------------------
-    def _get_status(
-            self, jd, jds, durations, time_interval, status_threshold=6,
-            mask_outl=None):
-        """Status based on linear ordinary least square regression with
-        exclusion of outliers.
-
-        Parameters
-        ----------
-        jd : float
-            JD of the date of interest.
-        jds : array-like
-            JDs of the observing windows.
-        durations : array-like
-            Durations of the observing windows for each JD.
-        time_interval : astropy.time.TimeDelta
-            Time accuracy at which the observing windows were calculated. The
-            status is considered "plateauing" if the standard deviation
-            of the durations is smaller than this time interval times the
-            status_threshold.
-        status_threshold : float, optional
-            Scaling factor. See description of time_interval. The default is 6.
-        mask_outl : numpy.ndarray (dtype: bool) or None, optional
-            If given, Trues mark outliers that are removed from the OLS. The
-            default is None.
-
-        Returns
-        -------
-        status : str
-            Either "rising", "plateauing", or "setting".
-        setting_in : float
-            If the status is "setting" this is the duration in days, when the
-            field is setting. Otherwise a numpy.nan is returned.
-
-        Notes
-        -----
-        - This method is called by `_update_status_for_field()`.
-        """
-
-        x = np.asarray(jds)
-        y = np.asarray(durations)
-
-        # remove outliers:
-        if mask_outl is not None:
-            x = x[~mask_outl]
-            y = y[~mask_outl]
-
-        # get status:
-        if y.std() <= time_interval.value * status_threshold:
-            status = 'plateauing'
-            setting_in = np.nan
-
-        elif np.median(np.diff(y)) > 0:
-            status = 'rising'
-            setting_in = np.nan
-
-        else:
-            status = 'setting'
-
-            # linear regression for setting duration:
-            x = add_constant(x)
-            model = OLS(y, x).fit()
-            slope = model.params[1]
-            intercept = model.params[0]
-            setting_in = -intercept / slope - jd
-            setting_in = max(setting_in, 0)
-            setting_in = min(setting_in, 365)
-
-        return status, setting_in
-
-    #--------------------------------------------------------------------------
-    def _update_unknown_status(self, durations):
-        """Update the status where unknown, if possible.
-
-        Parameters
-        ----------
-        durations : pandas.DataFrame
-            Observing window durations and status information.
-
-        Notes
-        -------
-        Changes are done inplace, therefore the dataframe does not have to be
-        returned.
-        """
-
-        # identify blocks with unknown status:
-        sel_unk = durations['status'] == 'unknown'
-
-        # iterate through these blocks in reverse order:
-        for i0, i1 in true_blocks(sel_unk)[::-1]:
-
-            # skip blocks at the end:
-            if i1 == durations.shape[0] - 1:
-                continue
-
-            # otherwise, update status based on next status that is not
-            # 'not observable':
-            for j in range(1, 5):
-                # try to get next status, break if no more are available:
-                try:
-                    status = durations['status'][i1+j]
-                except KeyError:
-                    break
-
-                # if status is 'not observable', go to next status:
-                if status == 'not observable':
-                    continue
-
-                # update status:
-                if status != 'unknown':
-                    durations.loc[i0:i1, 'status'] = status
-                    durations.loc[i0:i1, 'update'] = True
-
-                # extrapolate setting duration, if needed:
-                if status == 'setting':
-                    setting_in = durations['setting_in'][i1+j] + j - 1
-                    setting_in += np.arange(i1 - i0 + 1, 0, -1)
-                    durations.loc[i0:i1, 'setting_in'] = setting_in
-
-                break
-
-            # all next statuses are 'not observable', set to 'setting':
-            else:
-                durations.loc[i0:i1, 'status'] = 'setting'
-                durations.loc[i0:i1, 'update'] = True
-                durations.loc[i0:i1, 'setting_in'] = np.arange(i1 - i0, -1, -1)
-
-    #--------------------------------------------------------------------------
-    def _update_status_for_field(
-            self, counter, counter_lock, queue_status, db, field_id, jd_before,
-            jd_after, days_before, days_after, outlier_threshold,
-            status_threshold, time_interval):
-        """Determine the observability status for a specific field for each
-        day, for which the status is not yet known, and store it in the
-        database.
+    def _get_setting_duration_for_field(
+            self, counter, counter_lock, queue, db, field_id, jd_from, jd_to,
+            jd_done, days_required=10, outlier_threshold=0.6):
+        """Determine the setting duration for a specific setting field for each
+        day, for which the setting duration is yet unknown.
 
         Parameters
         ----------
@@ -1602,35 +1416,31 @@ class ObservabilityPlanner:
             Counter that stores how many fields have been processed.
         counter_lock : multiprocessing.managers.AcquirerProxy
             A lock for the counter.
-        queue_status : multiprocessing.managers.AutoProxy[Queue]
-            Queue containing the observability status.
+        queue : multiprocessing.managers.AutoProxy[Queue]
+            Queue for storing the setting duration.
         db : db.DBConnectorSQLite
             Active database connection.
         field_id : int
             Field ID.
-        jd_before : float
+        jd_from : float
             Field observabilities are queried from this JD.
-        jd_after : float
+        jd_to : float
             Field observabilities are queried up to this JD.
-        days_before : int
-            Determining the field's status requires the analysis of observation
-            windows in a time range. This arguments sets how many days before
-            are considered.
-        days_after : int
-            Determining the field's status requires the analysis of observation
-            windows in a time range. This arguments sets how many days after
-            are considered.
-        outlier_threshold : float
-            Threshold for outlier detection. Days with observing window
-            durations outlying from the general trend are not considered in
-            the status analysis.
-        status_threshold : float
-            Threshold for distinguishing plateauing from rising or setting. If
-            the OLS p-value is larger than this threshold, the status is
-            considered "plateauing"; otherwise "rising" or "setting" depending
-            on the slope.
-        time_interval : astropy.time.TimeDelta
-            Time accuracy at which the observing windows were calculated.
+        jd_done : float
+            The JD up to which observabilities have been calculated for this
+            field.
+        days_required : int, optional
+            This argument is used in two cases:
+            Either (a), number of days, that a field is setting, required to
+            calulate the linear fit.
+            Or (b), number of days, that a field must have been not observable,
+            before it is considered to have set.
+            In both cases a higher value should lead to more robust estimates
+            of the setting duration. The default is 10.
+        outlier_threshold : float, optional
+            Threshold for outlier detection. Data points with a Cook's distance
+            p-value lower than this threshold are considered outliers and are
+            excluded from the ordinary least squares fit. The default is 0.6.
 
         Returns
         -------
@@ -1638,86 +1448,66 @@ class ObservabilityPlanner:
 
         Notes
         -----
-        - This method is run by a pool of workers started by `_add_status()`.
+        - This method is run by a pool of workers started by
+          `_add_setting_durations()`.
+        - This method calls `_get_obs_window_durations()`.
         """
 
         durations = self._get_obs_window_durations(
-                db, field_id, jd_before, jd_after)
-        sel_init = durations['status'] == 'init'
+                db, field_id, jd_from, jd_to)
 
-        # iterate through days:
-        for i in np.nonzero(sel_init.to_numpy())[0]:
-            jd = durations.iloc[i]['jd']
-            jd_before = jd - days_before
-            jd_after = jd + days_after
-            sel_time = np.logical_and.reduce([
-                    durations['jd'] >= jd_before,
-                    durations['jd'] <= jd_after,
-                    durations['status'] != 'not observable'])
+        sel = durations['status'] == 'setting'
+        durations = durations.loc[sel]
 
-            # not enough observing windows before or after:
-            if (durations.loc[sel_time, 'jd'].iloc[0] != jd_before or
-                    durations.loc[sel_time, 'jd'].iloc[-1] != jd_after):
-                status = 'unknown'
-                durations.at[i, 'status'] = status
+        # if at least ten durations are available:
+        if durations.shape[0] > days_required:
+            # linear fit to all durations:
+            x = add_constant(durations['jd'].values)
+            y = durations['duration'].values
+            model = OLS(y, x).fit()
 
-            # determine status
-            else:
-                outliers = self._detect_outliers(
-                        durations.loc[sel_time, 'jd'],
-                        durations.loc[sel_time, 'duration'],
-                        outlier_threshold=outlier_threshold)
-                status, setting_in = self._get_status(
-                        jd, durations.loc[sel_time, 'jd'],
-                        durations.loc[sel_time, 'duration'], time_interval,
-                        status_threshold=status_threshold, mask_outl=outliers)
-                durations.at[i, 'status'] = status
-                durations.at[i, 'update'] = True
+            # check for outliers:
+            influence = model.get_influence()
+            __, cooks_pval = influence.cooks_distance
+            outliers = cooks_pval < outlier_threshold
 
-                if status == 'setting':
-                    durations.at[i, 'setting_in'] = setting_in
+            # fit again without outliers:
+            model = OLS(y[~outliers], x[~outliers]).fit()
+            slope = model.params[1]
+            intercept = model.params[0]
 
-        self._update_unknown_status(durations)
+            # determine setting duration where missing:
+            sel = durations['setting_duration'].isna()
+            setting_in = -intercept / slope - durations.loc[sel, 'jd'].values
+            setting_in = np.maximum(setting_in, 0)
+            setting_in = np.minimum(setting_in, 365)
+            setting_in = np.floor(setting_in)
+
+        # if field has been not observable for at least 10 days
+        elif durations.iloc[-1]['jd'] < jd_done - days_required:
+            sel = durations['setting_duration'].isna()
+            setting_in = jd_done - durations.loc[sel, 'jd']
+
+        # otherwise leave setting duration empty in database for now:
+        else:
+            setting_in = np.array([])
 
         # add to queue:
-        sel = durations['update']
-
-        for __, status in durations.loc[sel].iterrows():
-            queue_status.put((
-                    status['observability_id'], status['status'],
-                    status['setting_in']))
+        for observability_id, setting_duration in zip(
+                durations.loc[sel, 'observability_id'], setting_in):
+            queue.put((observability_id, setting_duration))
 
         with counter_lock:
             counter.value += 1
 
     #--------------------------------------------------------------------------
-    def _add_status(
-            self, days_before, days_after, outlier_threshold,
-            status_threshold, time_interval, batch_write=10000, processes=1):
+    def _add_setting_durations(self, batch_write=10000, processes=1):
+        # TODO: update docstring
         """Determine the observability status for each field for each day and
         save it in the database.
 
         Parameters
         ----------
-        days_before : int
-            Determining the field's status requires the analysis of observation
-            windows in a time range. This arguments sets how many days before
-            are considered.
-        days_after : int
-            Determining the field's status requires the analysis of observation
-            windows in a time range. This arguments sets how many days after
-            are considered.
-        outlier_threshold : float
-            Threshold for outlier detection. Days with observing window
-            durations outlying from the general trend are not considered in
-            the status analysis.
-        status_threshold : float
-            Threshold for distinguishing plateauing from rising or setting. If
-            the OLS p-value is larger than this threshold, the status is
-            considered "plateauing"; otherwise "rising" or "setting" depending
-            on the slope.
-        time_interval : astropy.time.TimeDelta
-            Time accuracy at which the observing windows were calculated.
         batch_write : int, optional
             Observing window are temporarily saved and then written to the
             database in batches of this size. The default is 10000.
@@ -1731,40 +1521,39 @@ class ObservabilityPlanner:
 
         Notes
         -----
-        - This method is called by `check_observability()`.
-        - This method starts `_update_status_in_db()` in a separate process.
-        - This method starts `_update_status_for_field()` in a pool of
+        - This method is called by `observability()`.
+        - This method calls `self._get_fields_missing_setting_duration()`.
+        - This method starts `_update_setting_durations_in_db()` in a separate
+          process.
+        - This method starts `_get_setting_duration_for_field()` in a pool of
           processes.
         """
 
         db = ObservabilityManager(self.dbname)
-        field_ids, jds_min, jds_max = self._get_fields_missing_status()
-        jds_before = jds_min - days_before
-        jds_after = jds_max + days_after
+        field_ids, jds_from, jds_to, jds_done = \
+                self._get_fields_missing_setting_duration()
+        jds_from -= 10
         n_fields = field_ids.shape[0]
-        print('\nDetermine observability status of fields..')
-        print(f'{n_fields} fields need status updates..')
+        print('\nEstimate setting duration of fields..')
+        print(f'{n_fields} fields need setting durations..')
 
         # parallel process fields:
         manager = Manager()
-        queue_status = manager.Queue()
+        queue = manager.Queue()
         counter = manager.Value(int, 0)
         counter_lock = manager.Lock()
+
         writer = Process(
-                target=self._update_status_in_db,
-                args=(db, counter, queue_status, n_fields, batch_write)
+                target=self._update_setting_durations_in_db,
+                args=(db, counter, queue, n_fields, batch_write)
                 )
         writer.start()
 
         with Pool(processes=processes) as pool:
             pool.starmap(
-                    self._update_status_for_field,
-                    zip(repeat(counter), repeat(counter_lock),
-                        repeat(queue_status),
-                        repeat(db), field_ids, jds_before, jds_after,
-                        repeat(days_before), repeat(days_after),
-                        repeat(outlier_threshold), repeat(status_threshold),
-                        repeat(time_interval)))
+                    self._get_setting_duration_for_field,
+                    zip(repeat(counter), repeat(counter_lock), repeat(queue),
+                        repeat(db), field_ids, jds_from, jds_to, jds_done))
 
         writer.join()
 
@@ -1774,6 +1563,7 @@ class ObservabilityPlanner:
             batch_write=1000, processes=1, time_interval_init=600,
             time_interval_refine=60, days_before=7, days_after=7,
             outlier_threshold=0.7, status_threshold=6, all_fields=False):
+        # TODO: remove irrelevant arguments, update docstring
         """Calculate observing windows for all active fields and add them to
         the database.
 
@@ -1932,11 +1722,9 @@ class ObservabilityPlanner:
                     date_start, duration_limit, batch_write, processes,
                     time_interval_init, time_interval_refine, agreed_to_gaps)
 
-        # determine observability status for each field for each day:
-        #self._add_status(
-        #        days_before, days_after, outlier_threshold,
-        #        status_threshold, time_interval_refine,
-        #        batch_write=batch_write, processes=processes)
+        # add setting duration for each setting field where missing:
+        self._add_setting_durations(
+                batch_write=batch_write, processes=processes)
 
 #==============================================================================
 

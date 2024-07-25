@@ -1802,7 +1802,8 @@ class FieldManager(DBManager):
         return result
 
     #--------------------------------------------------------------------------
-    def get_fields_missing_status(self):
+    def get_fields_missing_setting_duration(self):
+        # TODO: update docstring
         """Query fields from the database that have missing or unknown
         observability status in some entries.
 
@@ -1815,11 +1816,18 @@ class FieldManager(DBManager):
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
-            SELECT field_id, jd
-            FROM Observability
-            WHERE (
-            	status_id = 1
-            	AND active = 1)
+            WITH o AS (
+                SELECT field_id, jd
+                FROM Observability
+                WHERE (
+                	status_id = 4
+                    AND setting_duration IS NULL
+                	AND active = 1)
+                )
+            SELECT o.field_id, o.jd, t.jd_next
+            FROM o
+            LEFT JOIN TimeRanges AS t
+            ON o.field_id = t.field_id
             """
             results = self._query(connection, query).fetchall()
 
@@ -3882,17 +3890,15 @@ class ObservabilityManager(DBManager):
             connection.commit()
 
     #--------------------------------------------------------------------------
-    def update_observability_status(
-            self, observability_ids, status_ids, setting_in):
+    def update_setting_durations(
+            self, observability_ids, setting_durations):
         """Update observability status.
 
         Parameters
         ----------
         observability_ids : list of int
             Observability IDs where database needs to be updated.
-        status_ids : list of int
-            Status IDs to set in the database.
-        setting_in : list of float
+        setting_durations : list of float
             Durations in days until which a field will set.
 
         Returns
@@ -3903,25 +3909,17 @@ class ObservabilityManager(DBManager):
         # check input:
         if isinstance(observability_ids, int):
             observability_ids = [observability_ids]
-            status_ids = [status_ids]
-            setting_in = [setting_in]
+            setting_durations = [setting_durations]
 
         with SQLiteConnection(self.db_file) as connection:
             # iterate though entries:
-            for observability_id, status_id, setting in zip(
-                    observability_ids, status_ids, setting_in):
-                if setting is None:
-                    query = """\
-                        UPDATE Observability
-                        SET status_id={0}
-                        WHERE observability_id={1};
-                        """.format(status_id, observability_id)
-                else:
-                    query = """\
-                        UPDATE Observability
-                        SET status_id={0}, setting_duration={1}
-                        WHERE observability_id={2};
-                        """.format(status_id, setting, observability_id)
+            for observability_id, setting_duration in zip(
+                    observability_ids, setting_durations):
+                query = """\
+                    UPDATE Observability
+                    SET setting_duration={0}
+                    WHERE observability_id={1};
+                    """.format(setting_duration, observability_id)
                 self._query(connection, query, commit=False)
 
             connection.commit()
@@ -4000,9 +3998,11 @@ class ObservabilityManager(DBManager):
 
         with SQLiteConnection(self.db_file) as connection:
             query = """
-            SELECT a.observability_id, a.jd, b.status, a.duration
+            SELECT a.observability_id, a.jd, b.status, a.duration,
+                   a.setting_duration
             FROM (
-                SELECT o.observability_id, o.jd, o.status_id, ow.duration
+                SELECT o.observability_id, o.jd, o.status_id, ow.duration,
+                       o.setting_duration
                 FROM Observability o
                 LEFT JOIN ObsWindows ow
                 ON o.observability_id = ow.observability_id
