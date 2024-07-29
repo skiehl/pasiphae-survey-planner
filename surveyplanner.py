@@ -59,7 +59,8 @@ class Field:
 
     #--------------------------------------------------------------------------
     def _get_obs_windows(
-            self, observable, telescope, frame, time_sunrise, refine):
+            self, observable, telescope, frame, time_sunrise, refine,
+            duration_limit):
         """Calculate time windows when the field is observable.
 
         Parameters
@@ -80,6 +81,9 @@ class Field:
             I.e. if the interval given in 'frame' is 10 minutes and refine
             is a TimeDelta corresponding to 1 minute, the window limits will
             be accurate to a minute.
+        duration_limit : astropy.time.TimeDelta
+            Limit on the observing window duration above which a field is
+            considered observable.
 
         Returns
         -------
@@ -146,7 +150,7 @@ class Field:
                     t_stop = time_sunrise
 
                 # store observing window:
-                if t_start != t_stop:
+                if t_start != t_stop and t_stop - t_start >= duration_limit:
                     obs_windows.append((t_start, t_stop))
 
         # in case of no precision refinement:
@@ -158,7 +162,7 @@ class Field:
                     t_stop = time_sunrise
 
                 # store observing window:
-                if t_start != t_stop:
+                if t_start != t_stop and t_stop - t_start >= duration_limit:
                     obs_windows.append((t_start, t_stop))
 
         return obs_windows
@@ -213,7 +217,7 @@ class Field:
 
     #--------------------------------------------------------------------------
     def get_observability(
-            self, telescope, frame, time_sunrise, refine):
+            self, telescope, frame, time_sunrise, refine, duration_limit):
         """Calculate time windows when the field is observable.
 
         Parameters
@@ -231,6 +235,9 @@ class Field:
             I.e. if the interval given in 'frame' is 10 minutes and refine
             is a TimeDelta corresponding to 1 minute, the window limits will
             be accurate to a minute.
+        duration_limit : astropy.time.TimeDelta
+            Limit on the observing window duration above which a field is
+            considered observable.
 
         Returns
         -------
@@ -248,12 +255,21 @@ class Field:
         `self._get_observability_status()`.
         """
 
+        # check observational constraints:
         observable, observable_hard, __ = telescope.constraints.get(
                 self.center_coord, frame)
+
+        # determine observability windows:
         obs_windows = self._get_obs_windows(
-                observable, telescope, frame, time_sunrise, refine)
-        obs_status = self._get_observability_status(
-                observable, observable_hard)
+                observable, telescope, frame, time_sunrise, refine,
+                duration_limit)
+
+        # determine observability status:
+        if obs_windows:
+            obs_status = self._get_observability_status(
+                    observable, observable_hard)
+        else:
+            obs_status = 'not observable'
 
         return obs_windows, obs_status
 
@@ -847,8 +863,7 @@ class ObservabilityPlanner:
         return jd_start, jd_stop, n_days, agreed_to_gaps
 
     #--------------------------------------------------------------------------
-    def _read_obs_from_queue(
-            self, db, queue_obs_windows, n, duration_limit):
+    def _read_obs_from_queue(self, db, queue_obs_windows, n):
         """Read results from the queues to be written to the database.
 
         Parameters
@@ -862,9 +877,6 @@ class ObservabilityPlanner:
             be updated.
         n : int
             Number of entries to read from the queue.
-        duration_limit : astropy.time.TimeDelta
-            Limit on the observing window duration above which a field is
-            considered observable.
 
         Returns
         -------
@@ -916,13 +928,11 @@ class ObservabilityPlanner:
 
             for start, stop in obs_windows:
                 duration = (stop - start)
-
-                if duration >= duration_limit:
-                    batch_obs_windows_field_ids.append(field_id)
-                    batch_obs_windows_obs_ids.append(observability_id)
-                    batch_obs_windows_start.append(start)
-                    batch_obs_windows_stop.append(stop)
-                    batch_obs_windows_duration.append(duration)
+                batch_obs_windows_field_ids.append(field_id)
+                batch_obs_windows_obs_ids.append(observability_id)
+                batch_obs_windows_start.append(start)
+                batch_obs_windows_stop.append(stop)
+                batch_obs_windows_duration.append(duration)
 
             batch_status.append(obs_status)
             observability_id += 1
@@ -933,8 +943,8 @@ class ObservabilityPlanner:
 
     #--------------------------------------------------------------------------
     def _add_observabilities_to_db(
-            self, db, counter, queue_obs_windows, jd, parameter_set_id,
-            duration_limit, n_tbd, batch_write):
+            self, db, counter, queue_obs_windows, jd, parameter_set_id, n_tbd,
+            batch_write):
         """Write observability status and observation windows to database.
 
         Parameters
@@ -949,9 +959,6 @@ class ObservabilityPlanner:
             JD of the current observing window calculation.
         parameter_set_id : int
             Parameter set ID of the used constraints.
-        duration_limit : astropy.time.TimeDelta
-            Limit on the observing window duration above which a field is
-            considered observable.
         n_tbd : int
             Number of fields whose calculated observing windows need to be
             written to the database.
@@ -991,7 +998,7 @@ class ObservabilityPlanner:
                 batch_obs_windows_field_ids, batch_obs_windows_obs_ids, \
                 batch_obs_windows_start, batch_obs_windows_stop, \
                 batch_obs_windows_duration = self._read_obs_from_queue(
-                        db, queue_obs_windows, batch_write, duration_limit)
+                        db, queue_obs_windows, batch_write)
                 n_queried = len(batch_field_ids)
                 write = True
 
@@ -1030,7 +1037,7 @@ class ObservabilityPlanner:
     #--------------------------------------------------------------------------
     def _find_obs_window_for_field(
             self, counter, counter_lock, queue_obs_windows, jd, frame,
-            time_sunrise, field, init, refine):
+            time_sunrise, field, init, refine, duration_limit):
         """Calculate observing window(s) for a specific field for a specific
         time frame.
 
@@ -1058,6 +1065,9 @@ class ObservabilityPlanner:
             repeated.
         refine : astropy.time.TimeDelta
             Time accuracy at which the observing window is calculated.
+        duration_limit : astropy.time.TimeDelta
+            Limit on the observing window duration above which a field is
+            considered observable.
 
         Returns
         -------
@@ -1076,7 +1086,8 @@ class ObservabilityPlanner:
         # get observing windows and add them to queue:
         else:
             obs_windows, obs_status = field.get_observability(
-                    self.telescope, frame, time_sunrise, refine=refine)
+                    self.telescope, frame, time_sunrise, refine,
+                    duration_limit)
             queue_obs_windows.put((field.field_id, obs_windows, obs_status))
 
         with counter_lock:
@@ -1201,7 +1212,7 @@ class ObservabilityPlanner:
             writer = Process(
                     target=self._add_observabilities_to_db,
                     args=(db, counter, queue_obs_windows, jd, parameter_set_id,
-                          duration_limit, n_fields, batch_write)
+                          n_fields, batch_write)
                     )
             writer.start()
 
@@ -1211,7 +1222,8 @@ class ObservabilityPlanner:
                         zip(repeat(counter), repeat(counter_lock),
                             repeat(queue_obs_windows), repeat(jd),
                             repeat(frame), repeat(time_sunrise), fields,
-                            repeat(init), repeat(time_interval_refine)))
+                            repeat(init), repeat(time_interval_refine),
+                            repeat(duration_limit)))
 
             writer.join()
 
