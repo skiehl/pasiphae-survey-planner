@@ -1282,7 +1282,7 @@ class ObservabilityVisualizer(FieldVisualizer):
         # plot start/stop time:
         sc = self.ax.scatter(
                 x=x.loc[sel], y=y.loc[sel],
-                c=duration, vmin=0, vmax=365, **plot_kws)
+                c=duration, **plot_kws)
         cbar = plt.colorbar(sc, cax=self.cax)
         cbar.ax.set_ylabel('Field setting duration (days)')
 
