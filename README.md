@@ -38,7 +38,3 @@ A brief overview over the package's modules:
 ## Notebooks
 
 - **Doc_\*.ipynb**: Software demonstration.
-- **Develop_\*.ipynb** (and other notebooks): Used for the development and
-  testing of various aspects of the final package. They may not reflect the
-  latest state of the software and may be incompatible with the latest state of
-  the modules. The will eventually be removed from the repository.
