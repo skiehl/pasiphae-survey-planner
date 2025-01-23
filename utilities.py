@@ -404,3 +404,37 @@ def rotate_frame(ra, dec, instrument_center, tilt=0):
     return ra_rot, dec_rot
 
 #==============================================================================
+
+def true_blocks(values):
+    """Find blocks of successive True's.
+
+    Parameters
+    ----------
+    values : nump.ndarray
+        Boolean-type 1dim-array.
+
+    Returns
+    -------
+    list
+        Each element corresponds to one block of True's. The element is a
+        list of two integers, the first marking the first index of the
+        block, the second marking the last True entry of the block.
+    """
+
+    i = 0
+    periods = []
+
+    # iterate through array:
+    while i < values.size-1:
+        if ~np.any(values[i:]):
+            break
+        j = np.argmax(values[i:]) + i
+        k = np.argmax(~values[j:]) + j
+        if j == k and j != values.size-1:
+            k = values.size
+        periods.append((j,k-1))
+        i = k
+
+    return periods
+
+#==============================================================================
