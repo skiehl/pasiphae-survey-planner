@@ -225,8 +225,8 @@ class PrioritizerSkyCoverage(Prioritizer):
 
         # calculate priority:
         n_tot_max = np.max(n_tot)
-        coverage_local = (n_done + 1) / (n_tot + 1)
-        coverage_max = (n_done + 1) / (n_tot_max + 1)
+        coverage_local = n_done / n_tot
+        coverage_max = n_done / n_tot_max
         weight1 = n_done / n_tot
         weight2 = 1 - weight1
         priority = coverage_local * weight1 + coverage_max * weight2

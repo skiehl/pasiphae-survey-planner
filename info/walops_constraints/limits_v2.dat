@@ -1,0 +1,27 @@
+Sr. No,Hour Angle,Declination (in deg),Comments
+1,-03:30:00,-32:00:00,Telescope limit. Clears floor by 33 cm (measured).
+2,-03:10:00,-20:00:00,Telescope limit. Similar clearance as last time
+3,-02:40:00,-05:00:00,Telescope limit. Clearance from the floor increases.
+4,-02:30:00,+0:00:0,Telescope limit. 20 cm clearance from South pier.
+5,-02:12:00,+5:00:00,Clears South pier by 1 cm. Telescope limit.
+6,-04:00:00,-40:00:00,Telescope limit. Clears floor by 30 cm.
+7,-04:00:00,-50:00:00,Telescope limit. Clears floor by ~30 cm like last time.
+8,-04:00:00,-55:00:00,Telescope limit. Instrument (camera-n) clears the north pier by 8 cm.
+9,-01:00:00,-60:00:00,Instrument limit. Camera-n Hitting north pier.
+10,+00:30:00,-65:00:00,Instrument limit. Camera-w clears north pier by 5 cm.
+11,+00:30:00,-70:00:00,Instrument limit. Camera-w clears north pier by 5 cm.
+12,+1:15:00,-75:00:00,Instrument limit. Camera-w clears north pier by 3 cm
+13,+1:30:00,-76:00:00,Instrument limit. Camera-n hits north wall tube light bulb.
+14,+2:25:00,-70:00:00,Instrument limit. Camera-n hits the north wall tube light bulb.
+15,+03:00:00,-65:00:00,Instrument limit. Camera-n hits the north wall tube light bulb.
+16,+03:30:00,-60:00:00,Instrument limit. Camera-n hits the north wall tube light bulb.
+17,+04:00:00,-55:00:00,Instrument limit. Camera-w hits the north wall tube light bulb.
+18,+04:50:00,-55:00:00,Instrument limit. Camera-n and e hits clear the wall and the yellow bar by 1cm each. Cameras approaching north-east dome rail
+19,+02:55:00,-40:00:00,Hits yellow bar. Will approach the telescope limit if yellow bar is removed.
+20,+02:50:00,-30:00:00,Hits yellow bar. Will approach the telescope limit if the yellow bar is removed.
+21,+02:50:00,-20:00:00,Hits yellow bar. Will approach the telescope limit if the yellow bar is removed.
+22,+02:35:00,-10:00:00,Hits white bracket of the yellow bar. Will approach the telescope limit if the yellow bar is removed.
+23,+04:20:00,+00:00:00,Telescope limit. We clear the east rail.
+24,+04:20:00,+00:05:00,Telescope limit. Clears everything by more than 10 cm.
+
+

@@ -993,7 +993,7 @@ class SurveyVisualizer(FieldVisualizer):
 
         # define colors:
         if 'cmap' in plot_kws.keys():
-            cmap = plot_kws['cmap']
+            cmap = plt.get_cmap(plot_kws['cmap'])
         else:
             cmap = colors.ListedColormap([
                     (0.32, 0.9, 0.29), (1, 0.95, 0.42)], name='green_grey')
@@ -1320,7 +1320,9 @@ class ObservabilityVisualizer(FieldVisualizer):
         c = list(map(lambda s: status[s], self.fields['status']))
 
         # create 3-color colormap:
-        if 'cmap' not in plot_kws.keys():
+        if 'cmap' in plot_kws.keys():
+            plot_kws['cmap'] = plt.get_cmap(plot_kws['cmap'])
+        else:
             plot_kws['cmap'] = plt.cm.rainbow_r
 
         norm = colors.BoundaryNorm(np.arange(-0.5, 4.5), plot_kws['cmap'].N)
@@ -1549,6 +1551,257 @@ class AnnualObservabilityVisualizer(FieldVisualizer):
         sc = self.ax.scatter(x=x, y=y, c=availability, **plot_kws)
         cbar = plt.colorbar(sc, cax=self.cax)
         cbar.ax.set_ylabel(label)
+
+        # reverse x tick labels for Galactic coordinate plots:
+        if galactic:
+            self._reverse_xticklabels()
+
+        return self.fig, self.ax, self.cax
+
+#==============================================================================
+
+class PriorityVisualizer(FieldVisualizer):
+    """Visualize the priority of fields at a given date.
+    """
+
+    #--------------------------------------------------------------------------
+    def __init__(self, surveyplanner=None, fields=None):
+        """Visualize the priority of fields at a given date.
+
+        Parameters
+        ----------
+        surveyplanner : SurveyPlanner-type, optional
+            A SurveyPlanner instance that provides an access point to a
+            database to query the fields that should be plotted. If not
+            provided, fields have to be given either through the `fields`
+            argument or through the `set_fields()` method. The default is None.
+        fields : list of dict, optional
+            A list of dictionaries as returned by the
+            `SurveyPlanner().get_fields()` method after calling
+            `SurveyPlanner().plan()`. The default is None.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `surveyplanner` is not a SurveyPlanner-instance.
+
+        Returns
+        -------
+        None
+        """
+
+        super().__init__(surveyplanner=surveyplanner, fields=fields)
+        self.night = None
+
+    #--------------------------------------------------------------------------
+    def _check_fields(self, night, telescope):
+        """Check if fields have been stored for the requested night. Otherwise,
+        get fields from the stored SurveyPlanner instance.
+
+        Parameters
+        ----------
+        night : astropy.time.Time or str
+            Check if this provided night is identical with the one stored in
+            this class instance. If yes, then use the stored fields.
+            Otherwise, query fields for this given night from the stored
+            SurveyPlanner instance.
+        telescope : str
+            Name of the telescope for which fields should be queried.
+
+        Returns
+        -------
+        None
+        """
+
+        if (self.fields is None or self.night != night
+                or self.telescope != telescope):
+            self._get_fields(night=night, telescope=telescope)
+
+    #--------------------------------------------------------------------------
+    def _get_fields(self, night, telescope):
+        """Get fields from the stored SurveyPlanner instance for the specified
+        night and telescope with the information that is required for plotting.
+
+        Parameters
+        ----------
+        night : astropy.time.Time or str
+            The night for which fields should be queried.
+        telescope : str
+            Name of the telescope for which fields should be queried.
+
+        Raises
+        ------
+        ValueError
+            Raised, if no SurveyPlanner instance was provided at class
+            instanciation.
+
+        Returns
+        -------
+        None
+        """
+
+        # check if surveyplanner is available:
+        if self.surveyplanner is None:
+            raise ValueError(
+                    "No survey planner was provided at instanciation. Cannot "
+                    "query fields. Either use `set_fields()` to provide fields"
+                    " for plotting or create new visualizer instance and "
+                    "provide `surveyplanner`.")
+
+        # check that night is defined:
+        if type(night) not in [Time, str]:
+            raise ValueError(
+                    "`night` must be astropy.time.Time or str.")
+
+        print('Querying fields..')
+
+        self.surveyplanner.plan(night, telescope)
+        self.fields = DataFrame(self.surveyplanner.get_fields())
+        self._galactic_coords()
+        self._shift_ra()
+        self.night = night
+        self.telescope = telescope
+
+    #--------------------------------------------------------------------------
+    def _parse_fields(self, fields):
+        """Check if the provided fields contain the information that is
+        required for plotting.
+
+        Parameters
+        ----------
+        fields : any type
+            The "fields" that are provided as `fields` at class instanciation
+            or through the `set_fields()` method. Expected is a list of dict.
+
+        Raises
+        ------
+        ValueError
+            Raised, if `fields` is None.
+            Raised, if `fields` is not list.
+            Raised, if any item in `fields` list is not dict.
+            Raised, if any dict in `fields` list does not contain all of the
+            keys listed in `keys`.
+
+        Returns
+        -------
+        bool
+            True, if the `fields` input fulfills the criteria. Otherwise,
+            a ValueError is raised.
+        """
+
+        keys = ['center_ra', 'center_dec', 'priorityJoint']
+        error_message = "List of fields does not have the correct format. " \
+                "Use e.g. `SurveyPlanner().plan(date='2024-01-01', telescope" \
+                "='Skinakas')` and then `SurveyPlanner().get_fields()` to " \
+                "get a list of fields."
+
+        return super()._parse_fields(fields, keys, error_message)
+
+    #--------------------------------------------------------------------------
+    def _check_priorities(self, priority):
+        """Check that the selected priority type is available in the fields.
+
+        Raises
+        ------
+        ValueError
+            Raised, if selected priority is not contained in the stored field
+            information.
+
+        Returns
+        -------
+        bool
+            True, if the priority is contained in the field information.
+            Otherwise an error is raised.
+        """
+
+        # get column names and decapitalize all names:
+        columns = [t.lower() for t in self.fields.columns.to_list()]
+        self.fields.set_axis(columns, axis=1)
+
+        # get priority types:
+        priorities = [
+                t.replace('priority', '') for t in columns if 'priority' in t]
+
+        # check if selected priority exists:
+        if priority.lower() not in priorities:
+            raise ValueError(
+                    f"Priority '{priority}' is not contained in field " \
+                    "information.")
+
+        return True
+
+    #--------------------------------------------------------------------------
+    def plot(
+            self, priority, night=None, telescope=None, galactic=False,
+            projection='mollweide', ax=None, cax=None, plot_kws={},
+            other_kws={}):
+        """Plot the fields.
+
+        Parameters
+        ----------
+        priority : str
+            Priority type that should be displayed as color.
+        night : astropy.time.Time, str, or None, optional
+            The night for which fields should be plotted. If fields have been
+            provided through the `set_fields()` method, this argument can be
+            left as None. If a date is provided and it does not match the date
+            associated with the already stored fields, fields are queried. The
+            default is None.
+        telescope : str
+            Name of the telescope whose associated fields should be plotted.
+        galactic : bool, optional
+            If True, the plot will show Galactic coordinates; otherwise
+            Equatorial coordinates. The default is False.
+        projection : str, optional
+            Projection that should be used for plotting the field coordinates.
+            Must be 'mollweide', 'aitoff', 'hammer', 'lambert', or 'geo'. If
+            `ax` is provided, `projection` is ignored. The default is
+            'mollweide'.
+        ax : matplotlib.Axes or None, optional
+            If None, a new Axes is created. Otherwise, the fields are plotted
+            to the provided Axes. The default is None.
+        cax : matplotlib.Axes or None, optional
+            If None, a new Axes is created for the colorbar. Otherwise, the
+            colorbar is plotted in the provided Axes. The default is None.
+        plot_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the fields of interest.
+            The default is {}.
+        other_kws : dict, optional
+            Key word arguments forwarded to the plotting function
+            `matplotlib.pyplot.scatter()` that plots the remaining fields. E.g.
+            the non-observable or non setting fields. The default is {}.
+
+        Returns
+        -------
+        self.fig : matplotlib.Figure
+            The figure.
+        self.ax : matplotlib.Axes
+            The axes containing the plot.
+        self.cax : matplotlib.Axes
+            The axes containing the colorbar.
+        """
+
+        # check if fields exist:
+        self._check_fields(night=night, telescope=telescope)
+
+        # check that selected priority exists:
+        self._check_priorities(priority)
+
+        # create figure:
+        self._create_figure(projection, ax, cax)
+
+        # select appropriate coordinates:
+        x, y = self._get_coord(galactic)
+
+        # extract priority for color coding:
+        priorities = self.fields.loc[:, f'priority{priority}'].values
+
+        # plot start/stop time:
+        sc = self.ax.scatter(
+                x=x, y=y, c=priorities, **plot_kws)
+        cbar = plt.colorbar(sc, cax=self.cax)
+        cbar.ax.set_ylabel(f'Priority: {priority}')
 
         # reverse x tick labels for Galactic coordinate plots:
         if galactic:

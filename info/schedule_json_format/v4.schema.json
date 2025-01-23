@@ -1,0 +1,241 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "Schedule",
+  "description": "Schedule for the WALOP instrument",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Name of the schedule",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "date": {
+      "type": "string",
+      "description": "Date the schedule should be observed",
+      "format": "date"
+    },
+    "pi": {
+      "type": "string",
+      "description": "Principal Investigator of the schedule",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "mode": {
+      "type": "string",
+      "description": "Mode of the schedule (manual/auto)",
+      "enum": ["manual", "auto"]
+    },
+    "observer": {
+      "type": "string",
+      "description": "U/N of primary observer (will be cross-checked with software login)",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "description": "Object to be added to the objects databse of WALOP and to be observed in the schedule. If any object has been added to the database in a previous schedule, it need not be included here, unless a change to its coordinates/ guide star is required",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the object",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "ra": {
+            "type": "string",
+            "description": "Right Ascension of the object in sexagessimal hours",
+            "pattern": "^(\\+|-)?(([0-1][0-9])|(2[0-3])):([0-5][0-9]):([0-5][0-9])(\\.[0-9][0-9]?)?$"
+          },
+          "dec": {
+            "type": "string",
+            "description": "Declination of the object in sexagessimal degrees",
+            "pattern": "^((\\+|-)?([0-8][0-9]):([0-5][0-9]):([0-5][0-9])(\\.[0-9][0-9]?)?)|((\\+|-)?(90:00:00)(\\.0(0*))?)$"
+          },
+          "guidestar": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "X": {
+                  "type": "number",
+                  "description": "X coordinate of the guide star: [0-100]%",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "Y": {
+                  "type": "number",
+                  "description": "Y coordinate of the guide star: [0-100]%",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "T": {
+                  "type": "number",
+                  "description": "Exposure time for the guider in seconds",
+                  "minimum": 0
+                }
+              },
+              "required": ["X", "Y", "T"]
+            },
+            "minItems": 1
+          }
+        }
+      },
+      "required": ["ra", "dec", "name"]
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Name of the target (reference to objects in this or any other previously submitted schedule)",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "type": {
+            "type": "string",
+            "description": "Type of the target observation. See WALOP manual for details",
+            "enum": [
+              "PAS",
+              "SCI",
+              "CAL-UPO",
+              "CAL-POL",
+              "CAL-MOO",
+              "CAL-CAL",
+              "TES-SOF",
+              "TES-HAR",
+              "TES-E2E",
+              "TES-TES",
+              "LAB-OPT",
+              "LAB-MEC",
+              "LAB-CCD",
+              "LAB-SOF",
+              "LAB-LAB"
+            ]
+          },
+          "acquisition": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "window": {
+                  "type": "object",
+                  "description": "Observable time window for the acquisition. If after 00:00:00 LT, it is assumed to be the next day",
+                  "properties": {
+                    "start": {
+                      "type": "string",
+                      "description": "Start time of the window",
+                      "format": "time"
+                    },
+                    "end": {
+                      "type": "string",
+                      "description": "End time of the window",
+                      "format": "time"
+                    }
+                  },
+                  "required": ["start", "end"]
+                },
+                "guider": {
+                  "type": "boolean",
+                  "description": "Engage the guider for the acquisition. If false, the guider will not be engaged. If true, guidestar must have been defined in object definition or in database"
+                },
+                "filter": {
+                  "type": "integer",
+                  "description": "Filter number to be used for the acquisition",
+                  "minimum": 1,
+                  "maximum": 4
+                },
+                "hwp": {
+                  "type": "object",
+                  "description": "Half Wave Plate settings for the acquisition",
+                  "properties": {
+                    "engage": {
+                      "type": "boolean",
+                      "description": "Engage the HWP for the acquisition"
+                    },
+                    "continuous": {
+                      "type": "boolean",
+                      "description": "Continuous rotation of the HWP"
+                    },
+                    "angle": {
+                      "type": "number",
+                      "description": "Angle of the HWP in degrees. Must not be defined if continuous is true",
+                      "minimum": 0,
+                      "maximum": 360
+                    },
+                    "speed": {
+                      "type": "number",
+                      "description": "Speed of the HWP in rpm. Must not be defined if continuous is false",
+                      "minimum": 0,
+                      "maximum": 3.0
+                    }
+                  },
+                  "required": ["engage", "continuous"]
+                },
+                "polarizer": {
+                  "type": "object",
+                  "description": "Polarizer settings for the acquisition",
+                  "properties": {
+                    "engage": {
+                      "type": "boolean",
+                      "description": "Engage the polarizer for the acquisition"
+                    },
+                    "continuous": {
+                      "type": "boolean",
+                      "description": "Continuous rotation of the polarizer"
+                    },
+                    "angle": {
+                      "type": "number",
+                      "description": "Angle of the polarizer in degrees. Must not be defined if continuous is true",
+                      "minimum": 0,
+                      "maximum": 360
+                    },
+                    "speed": {
+                      "type": "number",
+                      "description": "Speed of the polarizer in rpm. Must not be defined if continuous is false",
+                      "minimum": 0,
+                      "maximum": 3.0
+                    }
+                  },
+                  "required": ["engage"]
+                },
+                "exposure": {
+                  "type": "object",
+                  "description": "Exposure settings for the acquisition",
+                  "properties": {
+                    "multiples": {
+                      "type": "integer",
+                      "description": "Number of exposures to be taken",
+                      "minimum": 1
+                    },
+                    "T": {
+                      "type": "integer",
+                      "description": "Exposure time per exposure in seconds",
+                      "minimum": 1
+                    }
+                  },
+                  "required": ["multiples", "T"]
+                }
+              },
+              "required": [
+                "window",
+                "guider",
+                "filter",
+                "hwp",
+                "polarizer",
+                "exposure"
+              ]
+            },
+            "minItems": 1
+          }
+        },
+        "required": ["target", "type", "acquisition"]
+      }
+    }
+  },
+  "required": ["name", "date", "pi", "mode", "observer", "objects", "targets"]
+}

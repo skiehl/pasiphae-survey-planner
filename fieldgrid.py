@@ -3,10 +3,13 @@
 """
 
 from abc import  ABCMeta, abstractmethod
-from astropy.coordinates import Angle, SkyCoord
-from astropy import units as u
+from astropy.coordinates import SkyCoord
+import json
 import numpy as np
 from textwrap import dedent
+
+from utilities import inside_polygon, cart_to_sphere, sphere_to_cart, \
+        rot_tilt, rot_dec, rot_ra
 
 __author__ = "Sebastian Kiehlmann"
 __credits__ = ["Sebastian Kiehlmann"]
@@ -17,213 +20,27 @@ __email__ = "skiehlmann@mail.de"
 __status__ = "Production"
 
 #==============================================================================
-# FUNCTIONS
-#==============================================================================
-
-def cart_to_sphere(x, y, z):
-    """Transform cartesian to spherical coordinates.
-
-    Parameters
-    ----------
-    x : np.ndarray or float
-        x-coordinates to transform.
-    y : np.ndarray or float
-        y-coordinates to transform.
-    z : np.ndarray or float
-        z-coordinates to transform.
-
-    Returns
-    -------
-    ra : np.ndarray or float
-        Right ascension in radians.
-    dec : np.ndarray or float
-        Declination in radians.
-    """
-
-    r = np.sqrt(x**2 + y**2 + z**2)
-    za = np.arccos(z / r)
-    dec = np.pi / 2. - za
-    ra = np.arctan2(y, x)
-    ra = np.mod(ra, 2*np.pi)
-
-    return ra, dec
-
-#--------------------------------------------------------------------------
-def sphere_to_cart(ra, dec):
-    """Transform spherical to cartesian coordinates.
-
-    Parameters
-    ----------
-    ra : np.ndarray or float
-        Right ascension(s) in radians.
-    dec : np.ndarray or float
-        Declination(s) in radians.
-
-    Returns
-    -------
-    x : np.ndarray or float
-        x-coordinate(s).
-    y : np.ndarray or float
-        y-coordinate(s).
-    z : np.ndarray or float
-        z-coordinate(s).
-    """
-
-    za = np.pi / 2. - dec
-    x = np.sin(za) * np.cos(ra)
-    y = np.sin(za) * np.sin(ra)
-    z = np.cos(za)
-
-    return x, y, z
-
-#--------------------------------------------------------------------------
-def rot_tilt(x, y, z, tilt):
-    """Rotate around x-axis by tilt angle.
-
-    Parameters
-    ----------
-    x : np.ndarray or float
-        x-coordinates to rotate.
-    y : np.ndarray or float
-        y-coordinates to rotate.
-    z : np.ndarray or float
-        z-coordinates to rotate.
-    tilt : float
-        Angle in radians by which the coordinates are rotated.
-
-    Returns
-    -------
-    x_rot : np.ndarray or float
-        Rotated x-coordinates.
-    y_rot : np.ndarray or float
-        Rotated y-coordinates.
-    z_rot : np.ndarray or float
-        Rotated z-coordinates.
-    """
-
-    x_rot = x
-    y_rot = y * np.cos(tilt) - z * np.sin(tilt)
-    z_rot = y * np.sin(tilt) + z * np.cos(tilt)
-
-    return x_rot, y_rot, z_rot
-
-#--------------------------------------------------------------------------
-def rot_dec(x, y, z, dec):
-    """Rotate around y-axis by declination angle.
-
-    Parameters
-    ----------
-    x : np.ndarray or float
-        x-coordinates to rotate.
-    y : np.ndarray or float
-        y-coordinates to rotate.
-    z : np.ndarray or float
-        z-coordinates to rotate.
-    dec : float
-        Angle in radians by which the coordinates are rotated.
-
-    Returns
-    -------
-    x_rot : np.ndarray or float
-        Rotated x-coordinates.
-    y_rot : np.ndarray or float
-        Rotated y-coordinates.
-    z_rot : np.ndarray or float
-        Rotated z-coordinates.
-    """
-
-    dec = -dec
-    x_rot = x * np.cos(dec) + z * np.sin(dec)
-    y_rot = y
-    z_rot = -x * np.sin(dec) + z * np.cos(dec)
-
-    return x_rot, y_rot, z_rot
-
-#--------------------------------------------------------------------------
-def rot_ra(x, y, z, ra):
-    """Rotate around z-axis by right ascension angle.
-
-    Parameters
-    ----------
-    x : np.ndarray or float
-        x-coordinates to rotate.
-    y : np.ndarray or float
-        y-coordinates to rotate.
-    z : np.ndarray or float
-        z-coordinates to rotate.
-    ra : float
-        Angle in radians by which the coordinates are rotated.
-
-    Returns
-    -------
-    x_rot : np.ndarray or float
-        Rotated x-coordinates.
-    y_rot : np.ndarray or float
-        Rotated y-coordinates.
-    z_rot : np.ndarray or float
-        Rotated z-coordinates.
-    """
-
-    x_rot = x * np.cos(ra) - y * np.sin(ra)
-    y_rot = x * np.sin(ra) + y * np.cos(ra)
-    z_rot = z
-
-    return x_rot, y_rot, z_rot
-
-#==============================================================================
 # CLASSES
 #==============================================================================
 
 class FieldGrid(metaclass=ABCMeta):
-    """Separation of the sky into fields."""
+    """A class to separate the sky into fields."""
 
     #--------------------------------------------------------------------------
-    def __init__(
-            self, fov, overlap_ns=0, overlap_ew=0, tilt=0,
-            dec_lim_north=np.pi/2, dec_lim_south=-np.pi/2, gal_lat_lim=0,
-            gal_lat_lim_strict=False, verbose=0):
+    def __init__(self, verbose=1):
         """Create FieldGrid instance.
 
         Parameters
         ----------
-        fov : float
-            Field of view side length in radians.
-        overlap_ns : float, optional
-            Overlap between neighboring fields in North-South direction in
-            radian. The default is 0.
-        overlap_ew : float, optional
-            Overlap between neighboring fields in East-West direction in
-            radian. The default is 0.
-        tilt : float, optional
-            Tilt of the field of view in radians. The default is 0.
-        dec_lim_north : float, optional
-            Northern declination limit in radians. Fields North of this limit
-            are excluded. The default is np.pi/2.
-        dec_lim_south : float, optional
-            Southern declination limit in radians. Fields South of this limit
-            are excluded. The default is -np.pi/2.
-        gal_lat_lim : float, optional
-            Galactic latitude limit in radians. If the limit is X, fields with
-            Galactic latitude in [-X, X] are excluded. The default is 0.
-        gal_lat_lim_strict : bool, optional
-            If False, fields will be excluded when their field center is
-            within the Galactic latitude limits. If True, field will be
-            excluded only if all of the field corners are within the Galactic
-            latitude limits. The default is False.
         verbose : int, optional
-            Set level of verbosity. 0 only gives most essential information.
-            1 provides more details; 2 even more. -1 turns of any messages. The
-            default is 0.
+            Set level of verbosity. 0: no messages. 1: only give most essential
+            information. 2: provide more details; 3: even more details. The
+            default is 1.
 
         Raises
         ------
         ValueError
-            Raise with the North-South or East-West overlap exceeds the field
-            of view size.
-            Raised when the Northern or Southern declination limits exceed
-            pi/2.
-            Raised when Southern declination limit is higher than Southern
-            declination limit.
+            Raised if `verbose` not an integer.
 
         Returns
         -------
@@ -231,38 +48,18 @@ class FieldGrid(metaclass=ABCMeta):
         """
 
         # check input:
-        if overlap_ns >= fov:
-            raise ValueError("Overlap must be smaller than field of view.")
-        if overlap_ew >= fov:
-            raise ValueError("Overlap must be smaller than field of view.")
-        if abs(dec_lim_north) > np.pi / 2.:
-            raise ValueError("Northern declination limit cannot exceed pi/2.")
-        if abs(dec_lim_south) > np.pi / 2.:
-            raise ValueError("Southern declination limit cannot exceed -pi/2.")
-        if dec_lim_south > dec_lim_north:
-            raise ValueError(
-                    "Northern declination must be higher than Southern "
-                    "declination limit.")
+        if not isinstance(verbose, int):
+            raise ValueError("`verbose` must be integer.")
 
-        self.fov = fov
-        self.overlap_ns = overlap_ns
-        self.overlap_ew = overlap_ew
-        self.tilt = tilt
-        self.dec_lim_north = dec_lim_north
-        self.dec_lim_south = dec_lim_south
-        self.gal_lat_lim = gal_lat_lim
-        self.gal_lat_lim_strict = gal_lat_lim_strict
+        self.verbose = verbose
         self.center_ras = None
         self.center_decs = None
         self.corner_ras = None
         self.corner_decs = None
-        self.verbose = verbose
-
-        self._create_fields()
 
     #--------------------------------------------------------------------------
     def __len__(self):
-        """Returns length of field grid. I.e. number of fields."""
+        """Returns the number of fields."""
 
         return self.center_ras.shape[0] if self.center_ras is not None else 0
 
@@ -277,6 +74,14 @@ class FieldGrid(metaclass=ABCMeta):
             Description of main properties.
         """
 
+        fov = self.params['fov']
+        overlap_ns = self.params['overlap_ns']
+        overlap_ew = self.params['overlap_ew']
+        tilt = self.params['tilt']
+        gal_lat_lim = self.params['gal_lat_lim']
+        dec_lim_north = self.params['dec_lim_north']
+        dec_lim_south = self.params['dec_lim_south']
+
         info = dedent("""\
             FieldGrid : Field grid
             Field of view:    {0:7.4f} deg
@@ -287,14 +92,14 @@ class FieldGrid(metaclass=ABCMeta):
             Dec. lim. N:      {5:s}
             Dec. lim. S:      {6:s}
             Number of fields: {7:d}""".format(
-                np.degrees(self.fov), np.degrees(self.overlap_ns),
-                np.degrees(self.overlap_ew), np.degrees(self.tilt),
+                np.degrees(fov), np.degrees(overlap_ns),
+                np.degrees(overlap_ew), np.degrees(tilt),
                 f'{np.degrees(self.gal_lat_lim):7.4f} deg' \
-                    if self.gal_lat_lim else 'None',
+                    if gal_lat_lim else 'None',
                 f'{np.degrees(self.dec_lim_north):7.4f} deg' \
-                    if self.dec_lim_north else 'None',
+                    if dec_lim_north else 'None',
                 f'{np.degrees(self.dec_lim_south):7.4f} deg' \
-                    if self.dec_lim_south else 'None',
+                    if dec_lim_south else 'None',
                 self.center_ras.shape[0]))
 
         return info
@@ -365,9 +170,11 @@ class FieldGrid(metaclass=ABCMeta):
         None
         """
 
-        if self.verbose > 0:
+        if self.verbose > 1:
             print('  Calculate field corners..')
 
+        fov = self.params['fov']
+        tilt = self.params['tilt']
         corner_ras = []
         corner_decs = []
         n_fields = len(self.center_ras)
@@ -379,7 +186,7 @@ class FieldGrid(metaclass=ABCMeta):
                   end='')
 
             ras, decs = self._field_corners_rot(
-                    self.fov, tilt=self.tilt, center_ra=ra, center_dec=dec)
+                    fov, tilt=tilt, center_ra=ra, center_dec=dec)
             corner_ras.append(ras)
             corner_decs.append(decs)
 
@@ -407,9 +214,155 @@ class FieldGrid(metaclass=ABCMeta):
         pass
 
     #--------------------------------------------------------------------------
+    def _avoid_galactic_plane(self):
+        """Remove fiels that are located in the Galactic plane limits.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        The Galactic plane limits are given at the initialization of the class.
+        How the fields are identified as within the limits depends on the
+        `gal_lat_lim_strict` argument set with the class initialization.
+        Verbosity: This method only prints out information if the verbosity set
+        with the class initialization is > 1.
+        """
+
+        gal_lat_lim = self.params['gal_lat_lim']
+        gal_lat_lim_strict = self.params['gal_lat_lim_strict']
+
+        if not gal_lat_lim:
+            return None
+
+        # consider field centers:
+        if not gal_lat_lim_strict:
+            sel = self.in_galactic_plane(
+                    gal_lat_lim, center_ras=self.center_ras,
+                    center_decs=self.center_decs, verbose=self.verbose)
+
+        # consider field corners:
+        else:
+            sel = self.in_galactic_plane(
+                    gal_lat_lim, corner_ras=self.corner_ras,
+                    corner_decs=self.corner_decs, verbose=self.verbose)
+
+
+        if self.verbose > 2:
+            print('    Galactic latitude limit: +/-{0:.1f} deg'.format(
+                    np.degrees(gal_lat_lim)))
+
+            if gal_lat_lim_strict:
+                print('    Application: field corners')
+            else:
+                print('    Application: field centers')
+
+            print(f'    Fields removed:   {np.sum(sel)}')
+            print(f'    Fields remaining: {np.sum(~sel)}')
+
+        self.center_ras = self.center_ras[~sel]
+        self.center_decs = self.center_decs[~sel]
+        self.corner_ras = self.corner_ras[~sel]
+        self.corner_decs = self.corner_decs[~sel]
+
+    #--------------------------------------------------------------------------
+    def _create_fields(self):
+        """Create fields.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Verbosity: This method prints out information if the verbosity set
+        with the class initialization is >= 0. This is the most basic level of
+        verbosity.
+        """
+
+        if self.verbose > 0:
+            print('Create fields..')
+
+        self._calc_field_centers()
+        self._calc_field_corners()
+        self._avoid_galactic_plane()
+
+        if self.verbose > 0:
+            print(f'Final number of fields: {self.center_ras.size}')
+
+    #--------------------------------------------------------------------------
+    @abstractmethod
+    def set_params(self):
+        """Set new grid parameters.
+
+        Parameters
+        ----------
+        Depend on the specific field grid.
+
+        Raises
+        ------
+        ValueError
+            Raised if the grid parameters are without their allowed bounds.
+
+        Returns
+        -------
+        None
+        """
+
+        # check inputs:
+        # custom code goes here
+
+        # store parameters:
+        self.params = {}
+        # custom code goes here, all parameters need to be stored in this dict
+
+        # create fields:
+        self._create_fields()
+
+    #--------------------------------------------------------------------------
+    def save_params(self, filename):
+        """Save grid parameters in JSON file.
+
+        Parameters
+        ----------
+        filename : str
+            Filename for saving the parameters.
+
+        Returns
+        -------
+        None
+        """
+
+        with open(filename, mode='w') as f:
+            json.dump(self.params, f, indent=4)
+
+        print('Grid parameters saved in:', filename)
+
+    #--------------------------------------------------------------------------
+    def load_params(self, filename):
+        """Load grid parameters from JSON file.
+
+        Parameters
+        ----------
+        filename : str
+            Filename that stores the parameters.
+
+        Returns
+        -------
+        None
+        """
+
+        with open(filename, mode='r') as f:
+            params = json.load(f)
+            self.set_params(**params)
+
+        print(f'Grid parameters loaded from {filename}.')
+
+    #--------------------------------------------------------------------------
     def in_galactic_plane(
             self, gal_lat_lim, center_ras=None, center_decs=None,
-            corner_ras=None, corner_decs=None, verbose=0):
+            corner_ras=None, corner_decs=None, verbose=1):
         """Check which fields are located within the Galactic latitude limits.
 
         Parameters
@@ -427,7 +380,7 @@ class FieldGrid(metaclass=ABCMeta):
             Field corner declinations in radians. The default is None
         verbose : TYPE, optional
             Set level of verbosity. Information is printed by this method only
-            if verbose > 0. The default is 0.
+            if verbose > 1. The default is 0.
 
         Returns
         -------
@@ -456,10 +409,10 @@ class FieldGrid(metaclass=ABCMeta):
 
         # stop if Galactic latitude limit is 0:
         if not gal_lat_lim:
-            return np.zeros(n_fields)
+            return np.zeros(n_fields, dtype=bool)
 
         # otherwise, start checking:
-        if verbose > 0:
+        if verbose > 1:
             print('  Identify fields in Galactic plane..')
 
         # consider field centers:
@@ -478,85 +431,10 @@ class FieldGrid(metaclass=ABCMeta):
                     frame='icrs')
             coord = coord.transform_to('galactic')
             sel = np.logical_and(
-                    np.all(coord.b.rad < self.gal_lat_lim, axis=1),
-                    np.all(coord.b.rad > -self.gal_lat_lim, axis=1))
+                    np.all(coord.b.rad < gal_lat_lim, axis=1),
+                    np.all(coord.b.rad > -gal_lat_lim, axis=1))
 
         return sel
-
-    #--------------------------------------------------------------------------
-    def _avoid_galactic_plane(self):
-        """Remove fiels that are located in the Galactic plane limits.
-
-        Returns
-        -------
-        None
-
-        Notes
-        -----
-        The Galactic plane limits are given at the initialization of the class.
-        How the fields are identified as within the limits depends on the
-        `gal_lat_lim_strict` argument set with the class initialization.
-        Verbosity: This method only prints out information if the verbosity set
-        with the class initialization is > 1.
-        """
-
-        if not self.gal_lat_lim:
-            return None
-
-        # consider field centers:
-        if not self.gal_lat_lim_strict:
-            sel = self.in_galactic_plane(
-                    self.gal_lat_lim, center_ras=self.center_ras,
-                    center_decs=self.center_decs, verbose=self.verbose)
-
-        # consider field corners:
-        else:
-            sel = self.in_galactic_plane(
-                    self.gal_lat_lim, corner_ras=self.corner_ras,
-                    corner_decs=self.corner_decs, verbose=self.verbose)
-
-
-        if self.verbose > 1:
-            print('    Galactic latitude limit: +/-{0:.1f} deg'.format(
-                    np.degrees(self.gal_lat_lim)))
-
-            if self.gal_lat_lim_strict:
-                print('    Application: field corners')
-            else:
-                print('    Application: field centers')
-
-            print(f'    Fields removed:   {np.sum(sel)}')
-            print(f'    Fields remaining: {np.sum(~sel)}')
-
-        self.center_ras = self.center_ras[~sel]
-        self.center_decs = self.center_decs[~sel]
-        self.corner_ras = self.corner_ras[~sel]
-        self.corner_decs = self.corner_decs[~sel]
-
-    #--------------------------------------------------------------------------
-    def _create_fields(self):
-        """Create fields.
-
-        Returns
-        -------
-        None
-
-        Notes
-        -----
-        Verbosity: This method prints out information if the verbosity set
-        with the class initialization is >= 0. This is the most basic level of
-        verbosity.
-        """
-
-        if self.verbose > -1:
-            print('Create fields..')
-
-        self._calc_field_centers()
-        self._calc_field_corners()
-        self._avoid_galactic_plane()
-
-        if self.verbose > -1:
-            print(f'Final number of fields: {self.center_ras.size}')
 
     #--------------------------------------------------------------------------
     def get_center_coords(self):
@@ -598,65 +476,6 @@ class FieldGridIsoLat(FieldGrid):
     grid_type = 'isolatitudinal grid'
 
     #--------------------------------------------------------------------------
-    def __init__(
-            self, fov, overlap_ns=0, overlap_ew=0, tilt=0,
-            dec_lim_north=np.pi/2, dec_lim_south=-np.pi/2, gal_lat_lim=0,
-            gal_lat_lim_strict=False, verbose=0):
-        """Create FieldGridIsoLat instance.
-
-        Parameters
-        ----------
-        fov : float
-            Field of view side length in radians.
-        overlap_ns : float, optional
-            Overlap between neighboring fields in North-South direction in
-            radian. The default is 0.
-        overlap_ew : float, optional
-            Overlap between neighboring fields in East-West direction in
-            radian. The default is 0.
-        tilt : float, optional
-            Tilt of the field of view in radians. The default is 0.
-        dec_lim_north : float, optional
-            Northern declination limit in radians. Fields North of this limit
-            are excluded. The default is np.pi/2.
-        dec_lim_south : float, optional
-            Southern declination limit in radians. Fields South of this limit
-            are excluded. The default is -np.pi/2.
-        gal_lat_lim : float, optional
-            Galactic latitude limit in radians. If the limit is X, fields with
-            Galactic latitude in [-X, X] are excluded. The default is 0.
-        gal_lat_lim_strict : bool, optional
-            If False, fields will be excluded when their field center is
-            within the Galactic latitude limits. If True, field will be
-            excluded only if all of the field corners are within the Galactic
-            latitude limits. The default is False.
-        verbose : int, optional
-            Set level of verbosity. 0 only gives most essential information.
-            1 provides more details; 2 even more. -1 turns of any messages. The
-            default is 0.
-
-        Raises
-        ------
-        ValueError
-            Raise with the North-South or East-West overlap exceeds the field
-            of view size.
-            Raised when the Northern or Southern declination limits exceed
-            pi/2.
-            Raised when Southern declination limit is higher than Southern
-            declination limit.
-
-        Returns
-        -------
-        None
-        """
-
-        super(FieldGridIsoLat, self).__init__(
-                fov, overlap_ns=overlap_ns, overlap_ew=overlap_ew, tilt=tilt,
-                dec_lim_north=dec_lim_north, dec_lim_south=dec_lim_south,
-                gal_lat_lim=gal_lat_lim, gal_lat_lim_strict=gal_lat_lim_strict,
-                verbose=verbose)
-
-    #--------------------------------------------------------------------------
     def __str__(self):
         """Return information about the FieldGrid instance.
 
@@ -666,27 +485,7 @@ class FieldGridIsoLat(FieldGrid):
             Description of main properties.
         """
 
-        info = dedent("""\
-            FieldGridIsoLat : Iso-latitudinal field grid
-            Field of view:    {0:7.4f} deg
-            Overlap N-S       {1:7.4f} deg
-            Overlap E-W       {2:7.4f} deg
-            Tilt:             {3:+7.4f} deg
-            Gal. lat. lim:    {4:s}
-            Dec. lim. N:      {5:s}
-            Dec. lim. S:      {6:s}
-            Number of fields: {7:d}""".format(
-                np.degrees(self.fov), np.degrees(self.overlap_ns),
-                np.degrees(self.overlap_ew), np.degrees(self.tilt),
-                f'{np.degrees(self.gal_lat_lim):7.4f} deg' \
-                    if self.gal_lat_lim else 'None',
-                f'{np.degrees(self.dec_lim_north):7.4f} deg' \
-                    if self.dec_lim_north else 'None',
-                f'{np.degrees(self.dec_lim_south):7.4f} deg' \
-                    if self.dec_lim_south else 'None',
-                self.center_ras.shape[0]))
-
-        return info
+        return super.__str__
 
     #--------------------------------------------------------------------------
     def _split_declination(self):
@@ -703,9 +502,14 @@ class FieldGridIsoLat(FieldGrid):
         of verbosity.
         """
 
-        dec_range = self.dec_lim_north - self.dec_lim_south
-        field_range = self.fov - self.overlap_ns
-        n = (dec_range - self.overlap_ns) / field_range
+        dec_lim_north = self.params['dec_lim_north']
+        dec_lim_south = self.params['dec_lim_south']
+        fov = self.params['fov']
+        overlap_ns = self.params['overlap_ns']
+
+        dec_range = dec_lim_north - dec_lim_south
+        field_range = fov - overlap_ns
+        n = (dec_range - overlap_ns) / field_range
 
         # round when n (almost) is an interger number:
         if np.isclose(np.mod(n, 1), 0):
@@ -715,13 +519,13 @@ class FieldGridIsoLat(FieldGrid):
         else:
             n = int(np.ceil(n))
 
-        if self.verbose > 1:
+        if self.verbose > 2:
             print(f'    Number of declination circles: {n}')
 
         # calculate declinations of isolatitudinal rings:
-        dec_range_real = n * field_range + self.overlap_ns
+        dec_range_real = n * field_range + overlap_ns
         offset = (dec_range_real - dec_range) / 2.
-        dec0 = self.dec_lim_south + self.fov / 2. - offset
+        dec0 = dec_lim_south + fov / 2. - offset
         dec1 = dec0 + field_range * (n - 1)
         self.declinations = np.linspace(dec0, dec1, n)
 
@@ -762,11 +566,14 @@ class FieldGridIsoLat(FieldGrid):
         of verbosity.
         """
 
+        fov = self.params['fov']
+        tilt = self.params['tilt']
+
         # get first two field's corners:
         field0_corner_ras, field0_corner_decs = self._field_corners_rot(
-                self.fov, tilt=self.tilt, center_ra=ras[0], center_dec=decs[0])
+                fov, tilt=tilt, center_ra=ras[0], center_dec=decs[0])
         field1_corner_ras, field1_corner_decs = self._field_corners_rot(
-                self.fov, tilt=self.tilt, center_ra=ras[1], center_dec=decs[1])
+                fov, tilt=tilt, center_ra=ras[1], center_dec=decs[1])
 
         # select two field corners - fields in the South:
         if field0_corner_decs[0] < 0:
@@ -781,7 +588,7 @@ class FieldGridIsoLat(FieldGrid):
         ra0 = field0_corner_ras[i]
         ra1 = field1_corner_ras[j]
 
-        if ra0 < ra1 and self.verbose > 1:
+        if ra0 < ra1 and self.verbose > 2:
             print('Closing gaps. ', end='')
 
         # increase number of fields until gaps are removed:
@@ -791,11 +598,9 @@ class FieldGridIsoLat(FieldGrid):
             decs = np.ones(n) * dec
 
             ra0 = self._field_corners_rot(
-                    self.fov, tilt=self.tilt, center_ra=ras[0],
-                    center_dec=decs[0])[0][i]
+                    fov, tilt=tilt, center_ra=ras[0], center_dec=decs[0])[0][i]
             ra1 = self._field_corners_rot(
-                    self.fov, tilt=self.tilt, center_ra=ras[1],
-                    center_dec=decs[1])[0][j]
+                    fov, tilt=tilt, center_ra=ras[1], center_dec=decs[1])[0][j]
 
         return ras, decs, n
 
@@ -824,7 +629,10 @@ class FieldGridIsoLat(FieldGrid):
         of verbosity.
         """
 
-        if self.verbose > 1:
+        fov = self.params['fov']
+        overlap_ew = self.params['overlap_ew']
+
+        if self.verbose > 2:
             print(f'    Dec: {np.degrees(dec):+6.2f} deg. ', end='')
 
         # create one field at the pole:
@@ -836,7 +644,7 @@ class FieldGridIsoLat(FieldGrid):
         # otherwise split isolatitudinal ring into n fields:
         else:
             n = int(np.ceil(
-                    2 * np.pi / (self.fov - self.overlap_ew)) * np.cos(dec))
+                    2 * np.pi / (fov - overlap_ew)) * np.cos(dec))
 
             if n < n_min:
                 n = n_min
@@ -845,7 +653,7 @@ class FieldGridIsoLat(FieldGrid):
             decs = np.ones(n) * dec
             ras, decs, n = self._close_gaps(ras, decs, dec, n)
 
-        if self.verbose > 1:
+        if self.verbose > 2:
             print(f'Number of fields: {n:6d}')
 
         return ras, decs
@@ -867,7 +675,7 @@ class FieldGridIsoLat(FieldGrid):
         of verbosity.
         """
 
-        if self.verbose > 0:
+        if self.verbose > 2:
             print('  Calculate field centers..')
 
         self._split_declination()
@@ -882,26 +690,18 @@ class FieldGridIsoLat(FieldGrid):
         self.center_ras = np.concatenate(center_ra)
         self.center_decs = np.concatenate(center_dec)
 
-#==============================================================================
-
-class FieldGridGrtCirc(FieldGrid):
-    """Separation of the sky into fields, placing fields on great circles.
-    """
-
-    grid_type = 'tilted great circle grid'
-
     #--------------------------------------------------------------------------
-    def __init__(
-            self, fov, overlap_ns=0, overlap_ew=0, tilt=0,
-            dec_lim_north=np.pi/2, dec_lim_south=-np.pi/2,
-            dec_lim_strict=False, gal_lat_lim=0, gal_lat_lim_strict=False,
-            frame_rot_ra=0, frame_rot_dec=0, verbose=0):
-        """Create FieldGridGrtCirc instance.
+    def set_params(
+            self, fov=np.pi/180, overlap_ns=0, overlap_ew=0, tilt=0,
+            dec_lim_north=np.pi/2, dec_lim_south=-np.pi/2, gal_lat_lim=0,
+            gal_lat_lim_strict=False):
+        """Set new grid parameters.
 
         Parameters
         ----------
-        fov : float
-            Field of view side length in radians.
+        fov : float, optional
+            Field of view side length in radians. The default is np.pi/180
+            (1 degree).
         overlap_ns : float, optional
             Overlap between neighboring fields in North-South direction in
             radian. The default is 0.
@@ -924,27 +724,16 @@ class FieldGridGrtCirc(FieldGrid):
             within the Galactic latitude limits. If True, field will be
             excluded only if all of the field corners are within the Galactic
             latitude limits. The default is False.
-        frame_rot_ra = float, optional
-            Angle in radians, by which the frame grid is rotated in right
-            ascension. The right ascension rotation is executed before the
-            declination rotation. The default is 0.
-        frame_rot_dec = float, optional
-            Angle in radians, by which the frame grid is rotated in
-            declination. The right ascension rotation is executed before the
-            declination rotation. The default is 0.
-        verbose : int, optional
-            Set level of verbosity. 0 only gives most essential information.
-            1 provides more details; 2 even more. -1 turns of any messages. The
-            default is 0.
 
         Raises
         ------
         ValueError
-            Raise with the North-South or East-West overlap exceeds the field
+            Raised if field of view is no in (0, pi].
+            Raised if the North-South or East-West overlap exceeds the field
             of view size.
-            Raised when the Northern or Southern declination limits exceed
+            Raised if the Northern or Southern declination limits exceed
             pi/2.
-            Raised when Southern declination limit is higher than Southern
+            Raised if Southern declination limit is higher than Northern
             declination limit.
 
         Returns
@@ -952,15 +741,43 @@ class FieldGridGrtCirc(FieldGrid):
         None
         """
 
-        self.dec_lim_strict = dec_lim_strict
-        self.frame_rot_ra = np.mod(frame_rot_ra, np.pi*2)
-        self.frame_rot_dec = np.mod(frame_rot_dec, np.pi)
+        # check inputs:
+        if fov <= 0 or fov > np.pi:
+            raise ValueError("Field of view must be in (0, pi].")
+        if overlap_ns >= fov:
+            raise ValueError("Overlap must be smaller than field of view.")
+        if overlap_ew >= fov:
+            raise ValueError("Overlap must be smaller than field of view.")
+        if abs(dec_lim_north) > np.pi / 2.:
+            raise ValueError("Northern declination limit cannot exceed pi/2.")
+        if abs(dec_lim_south) > np.pi / 2.:
+            raise ValueError("Southern declination limit cannot exceed -pi/2.")
+        if dec_lim_south > dec_lim_north:
+            raise ValueError(
+                    "Northern declination must be higher than Southern "
+                    "declination limit.")
 
-        super(FieldGridGrtCirc, self).__init__(
-                fov, overlap_ns=overlap_ns, overlap_ew=overlap_ew, tilt=tilt,
-                dec_lim_north=dec_lim_north, dec_lim_south=dec_lim_south,
-                gal_lat_lim=gal_lat_lim, gal_lat_lim_strict=gal_lat_lim_strict,
-                verbose=verbose)
+        # store parameters:
+        self.params = {}
+        self.params['fov'] = fov
+        self.params['overlap_ns'] = overlap_ns
+        self.params['overlap_ew'] = overlap_ew
+        self.params['tilt'] = tilt
+        self.params['dec_lim_north'] = dec_lim_north
+        self.params['dec_lim_south'] = dec_lim_south
+        self.params['gal_lat_lim'] = gal_lat_lim
+        self.params['gal_lat_lim_strict'] = gal_lat_lim_strict
+
+        # create fields:
+        self._create_fields()
+
+#==============================================================================
+
+class FieldGridGrtCirc(FieldGrid):
+    """Separation of the sky into fields, placing fields on great circles.
+    """
+
+    grid_type = 'tilted great circle grid'
 
     #--------------------------------------------------------------------------
     def __str__(self):
@@ -971,6 +788,16 @@ class FieldGridGrtCirc(FieldGrid):
         info : str
             Description of main properties.
         """
+
+        fov = self.params['fov']
+        overlap_ns = self.params['overlap_ns']
+        overlap_ew = self.params['overlap_ew']
+        tilt = self.params['tilt']
+        gal_lat_lim = self.params['gal_lat_lim']
+        dec_lim_north = self.params['dec_lim_north']
+        dec_lim_south = self.params['dec_lim_south']
+        frame_rot_ra = self.params['frame_rot_ra']
+        frame_rot_dec = self.params['frame_rot_dec']
 
         info = dedent("""\
             FieldGridGrtCirc : Tilted great-circle field grid
@@ -984,18 +811,18 @@ class FieldGridGrtCirc(FieldGrid):
             Grid rot. RA:     {7:s}
             Grid rot. dec:    {8:s}
             Number of fields: {9:d}""".format(
-                np.degrees(self.fov), np.degrees(self.overlap_ns),
-                np.degrees(self.overlap_ew), np.degrees(self.tilt),
+                np.degrees(fov), np.degrees(overlap_ns),
+                np.degrees(overlap_ew), np.degrees(tilt),
                 f'{np.degrees(self.gal_lat_lim):7.4f} deg' \
-                    if self.gal_lat_lim else 'None',
+                    if gal_lat_lim else 'None',
                 f'{np.degrees(self.dec_lim_north):7.4f} deg' \
-                    if self.dec_lim_north else 'None',
+                    if dec_lim_north else 'None',
                     f'{np.degrees(self.dec_lim_south):7.4f} deg' \
-                        if self.dec_lim_south else 'None',
+                        if dec_lim_south else 'None',
                 f'{np.degrees(self.frame_rot_ra):7.4f} deg' \
-                    if self.frame_rot_ra else 'None',
+                    if frame_rot_ra else 'None',
                 f'{np.degrees(self.frame_rot_dec):7.4f} deg' \
-                    if self.frame_rot_dec else 'None',
+                    if frame_rot_dec else 'None',
                 self.center_ras.shape[0]))
 
         return info
@@ -1016,14 +843,16 @@ class FieldGridGrtCirc(FieldGrid):
         of verbosity.
         """
 
-        field_range = self.fov - self.overlap_ns
-        n = int(np.ceil((np.pi - self.overlap_ns) / field_range))
-        offset = (n * field_range + self.overlap_ns - np.pi) / 2.
-        dec0 = -np.pi / 2. + self.fov / 2. - offset
-        dec1 = +np.pi / 2. - self.fov / 2. + offset
+        fov = self.params['fov']
+        overlap_ns = self.params['overlap_ns']
+        field_range = fov - overlap_ns
+        n = int(np.ceil((np.pi - overlap_ns) / field_range))
+        offset = (n * field_range + overlap_ns - np.pi) / 2.
+        dec0 = -np.pi / 2. + fov / 2. - offset
+        dec1 = +np.pi / 2. - fov / 2. + offset
         decs = np.linspace(dec0, dec1, n)
 
-        if self.verbose > 1:
+        if self.verbose > 2:
             print(f'    Number of declinations: {n}')
 
         return decs
@@ -1044,10 +873,12 @@ class FieldGridGrtCirc(FieldGrid):
         of verbosity.
         """
 
-        n = int(np.ceil(2 * np.pi / (self.fov - self.overlap_ew)))
+        fov = self.params['fov']
+        overlap_ew = self.params['overlap_ew']
+        n = int(np.ceil(2 * np.pi / (fov - overlap_ew)))
         ras = np.linspace(0, 2.*np.pi, n+1)[:-1]
 
-        if self.verbose > 1:
+        if self.verbose > 2:
             print(f'    Number of RA half circles: {n}')
 
         return ras
@@ -1081,25 +912,28 @@ class FieldGridGrtCirc(FieldGrid):
         of verbosity.
         """
 
-        if not self.frame_rot_ra and not self.frame_rot_dec:
+        frame_rot_ra = self.params['frame_rot_ra']
+        frame_rot_dec = self.params['frame_rot_dec']
+
+        if not frame_rot_ra and not frame_rot_dec:
             return ras, decs
 
         x, y, z = sphere_to_cart(ras, decs)
 
-        if self.frame_rot_dec:
-            if self.verbose > 1:
+        if frame_rot_dec:
+            if self.verbose > 2:
                 print('    Rotate frame by {0} deg in declination'.format(
-                        np.degrees(self.frame_rot_dec)))
+                        np.degrees(frame_rot_dec)))
 
-            x, y, z = rot_dec(x, y, z, self.frame_rot_dec)
+            x, y, z = rot_dec(x, y, z, frame_rot_dec)
 
 
-        if self.frame_rot_ra:
-            if self.verbose > 1:
+        if frame_rot_ra:
+            if self.verbose > 2:
                 print('    Rotate frame by {0} deg in RA'.format(
-                        np.degrees(self.frame_rot_ra)))
+                        np.degrees(frame_rot_ra)))
 
-                x, y, z = rot_ra(x, y, z, self.frame_rot_ra)
+                x, y, z = rot_ra(x, y, z, frame_rot_ra)
 
         ras_rot, decs_rot = cart_to_sphere(x, y, z)
 
@@ -1123,51 +957,54 @@ class FieldGridGrtCirc(FieldGrid):
         verbosity > 1.
         """
 
-        apply_north = ~np.isclose(self.dec_lim_north, np.pi/2.)
-        apply_south = ~np.isclose(self.dec_lim_south, -np.pi/2.)
-
-        if self.verbose > 0:
-            print('  Apply declination limits..')
+        dec_lim_north = self.params['dec_lim_north']
+        dec_lim_south = self.params['dec_lim_south']
+        dec_lim_strict = self.params['dec_lim_strict']
+        apply_north = ~np.isclose(dec_lim_north, np.pi/2.)
+        apply_south = ~np.isclose(dec_lim_south, -np.pi/2.)
 
         if self.verbose > 1:
+            print('  Apply declination limits..')
+
+        if self.verbose > 2:
             if apply_north:
                 print('    Dec. lim. North: {}'.format(
-                        np.degrees(self.dec_lim_north)))
+                        np.degrees(dec_lim_north)))
             else:
                 print('    Dec. lim. North: none')
 
             if apply_south:
                 print('    Dec. lim. South: {}'.format(
-                        np.degrees(self.dec_lim_south)))
+                        np.degrees(dec_lim_south)))
             else:
                 print('    Dec. lim. South: none')
 
         sel = np.ones(self.center_ras.shape[0], dtype=bool)
 
         # strict Norther limit:
-        if apply_north  and self.dec_lim_strict:
+        if apply_north  and dec_lim_strict:
             sel = np.logical_and(
-                sel, np.any(self.corner_decs <= self.dec_lim_north, axis=1))
+                sel, np.any(self.corner_decs <= dec_lim_north, axis=1))
 
         # loose Northern limit:
         elif apply_north:
-            sel = np.logical_and(sel, self.center_decs <= self.dec_lim_north)
+            sel = np.logical_and(sel, self.center_decs <= dec_lim_north)
 
         # strict Souther limit:
-        if apply_south and self.dec_lim_strict:
+        if apply_south and dec_lim_strict:
             sel = np.logical_and(
-                sel, np.any(self.corner_decs >= self.dec_lim_south, axis=1))
+                sel, np.any(self.corner_decs >= dec_lim_south, axis=1))
 
         # loose Southern limit:
         elif apply_south:
-            sel = np.logical_and(sel, self.center_decs >= self.dec_lim_south)
+            sel = np.logical_and(sel, self.center_decs >= dec_lim_south)
 
         self.center_ras = self.center_ras[sel]
         self.center_decs = self.center_decs[sel]
         self.corner_ras = self.corner_ras[sel]
         self.corner_decs = self.corner_decs[sel]
 
-        if self.verbose > 1:
+        if self.verbose > 2:
             print(f'    Fields removed:   {np.sum(~sel):6d}')
             print(f'    Fields remaining: {np.sum(sel):6d}')
 
@@ -1188,7 +1025,7 @@ class FieldGridGrtCirc(FieldGrid):
         of verbosity.
         """
 
-        if self.verbose > 0:
+        if self.verbose > 1:
             print('  Calculate field centers..')
 
         ras = self._split_ra()
@@ -1217,7 +1054,7 @@ class FieldGridGrtCirc(FieldGrid):
         verbosity.
         """
 
-        if self.verbose > -1:
+        if self.verbose > 0:
             print('Create fields..')
 
         self._calc_field_centers()
@@ -1225,8 +1062,112 @@ class FieldGridGrtCirc(FieldGrid):
         self._avoid_galactic_plane()
         self._declination_limits()
 
-        if self.verbose > -1:
+        if self.verbose > 0:
             print(f'Final number of fields: {self.center_ras.size}')
+
+    #--------------------------------------------------------------------------
+    def set_params(
+            self, fov=np.pi/180, overlap_ns=0, overlap_ew=0, tilt=0,
+            dec_lim_north=np.pi/2, dec_lim_south=-np.pi/2,
+            dec_lim_strict=False, gal_lat_lim=0, gal_lat_lim_strict=False,
+            frame_rot_ra=0, frame_rot_dec=0):
+        """Set new grid parameters.
+
+        Parameters
+        ----------
+        fov : float, optional
+            Field of view side length in radians. The default is np.pi/180
+            (1 degree).
+        overlap_ns : float, optional
+            Overlap between neighboring fields in North-South direction in
+            radian. The default is 0.
+        overlap_ew : float, optional
+            Overlap between neighboring fields in East-West direction in
+            radian. The default is 0.
+        tilt : float, optional
+            Tilt of the field of view in radians. The default is 0.
+        dec_lim_north : float, optional
+            Northern declination limit in radians. Fields North of this limit
+            are excluded. The default is np.pi/2.
+        dec_lim_south : float, optional
+            Southern declination limit in radians. Fields South of this limit
+            are excluded. The default is -np.pi/2.
+        gal_lat_lim_strict : bool, optional
+            If False, fields will be excluded when their field center is
+            within the Galactic latitude limits. If True, field will be
+            excluded only if all of the field corners are within the Galactic
+            latitude limits. The default is False.
+        gal_lat_lim : float, optional
+            Galactic latitude limit in radians. If the limit is X, fields with
+            Galactic latitude in [-X, X] are excluded. The default is 0.
+        gal_lat_lim_strict : bool, optional
+            If False, fields will be excluded when their field center is
+            within the Galactic latitude limits. If True, field will be
+            excluded only if all of the field corners are within the Galactic
+            latitude limits. The default is False.
+        frame_rot_ra = float, optional
+            Angle in radians, by which the frame grid is rotated in right
+            ascension. The right ascension rotation is executed before the
+            declination rotation. The default is 0.
+        frame_rot_dec = float, optional
+            Angle in radians, by which the frame grid is rotated in
+            declination. The right ascension rotation is executed before the
+            declination rotation. The default is 0.
+
+        Raises
+        ------
+        ValueError
+            Raised if field of view is no in (0, pi].
+            Raised if the North-South or East-West overlap exceeds the field
+            of view size.
+            Raised if the Northern or Southern declination limits exceed
+            pi/2.
+            Raised if Southern declination limit is higher than Northern
+            declination limit.
+            Raised if `frame_rot_ra` is not within [-2*pi, 2*pi].
+            Raised if `frame_rot_dec` is not within [-pi/2, pi/2].
+
+        Returns
+        -------
+        None
+        """
+
+        # check inputs:
+        if fov <= 0 or fov > np.pi:
+            raise ValueError("Field of view must be in (0, pi].")
+        if overlap_ns >= fov:
+            raise ValueError("Overlap must be smaller than field of view.")
+        if overlap_ew >= fov:
+            raise ValueError("Overlap must be smaller than field of view.")
+        if abs(dec_lim_north) > np.pi / 2.:
+            raise ValueError("Northern declination limit cannot exceed pi/2.")
+        if abs(dec_lim_south) > np.pi / 2.:
+            raise ValueError("Southern declination limit cannot exceed -pi/2.")
+        if dec_lim_south > dec_lim_north:
+            raise ValueError(
+                    "Northern declination must be higher than Southern "
+                    "declination limit.")
+        if frame_rot_ra <= -2 * np.pi or frame_rot_ra >= 2 * np.pi:
+            raise ValueError("`frame_rot_ra` should be within [-2*pi, 2*pi].")
+        if frame_rot_dec <= -np.pi / 2 or frame_rot_dec >= np.pi / 2:
+            raise ValueError("`frame_rot_dec` should be within [-pi/2, pi/2].")
+
+        # store parameters:
+        self.params = {}
+        self.params['fov'] = fov
+        self.params['overlap_ns'] = overlap_ns
+        self.params['overlap_ew'] = overlap_ew
+        self.params['tilt'] = tilt
+        self.params['dec_lim_north'] = dec_lim_north
+        self.params['dec_lim_south'] = dec_lim_south
+        self.params['dec_lim_strict'] = bool(dec_lim_strict)
+        self.params['gal_lat_lim'] = gal_lat_lim
+        self.params['gal_lat_lim_strict'] = gal_lat_lim_strict
+        self.params['frame_rot_ra'] = frame_rot_ra
+        self.params['frame_rot_dec'] = frame_rot_dec
+
+        # create fields:
+        self._create_fields()
 
 #==============================================================================
 
@@ -1470,93 +1411,6 @@ class FieldGridTester:
         return n_needed, points_ra, points_dec
 
     #--------------------------------------------------------------------------
-    def _orientation(self, p, q0, q1):
-        """Calculate the orientiation of a point relative to a line.
-
-        Parameters
-        ----------
-        p : np.ndarray
-            2D-coordinates of the point.
-        q0 : TYPE
-            2D-coordinates of the first point describing the line.
-        q1 : TYPE
-            2D-coordinates of the second point describing the line.
-
-        Returns
-        -------
-        sign : int
-            +1 or -1 depending on the orientation.
-        """
-
-        sign = np.sign(
-                (q1[0] - q0[0]) * (p[1] - q0[1]) - (p[0] - q0[0]) \
-                * (q1[1] - q0[1]))
-
-        return sign
-
-    #--------------------------------------------------------------------------
-    def _crossing(self, p, q0, q1):
-        """Check if  a horizontal line originating from point p towards the
-        right would cross the line spanned by points q0 and q1.
-
-        Parameters
-        ----------
-        p : np.ndarray
-            2D-coordinates of the point.
-        q0 : TYPE
-            2D-coordinates of the first point describing the line.
-        q1 : TYPE
-            2D-coordinates of the second point describing the line.
-
-        Returns
-        -------
-        cross : int
-            0 if it does cross. +1 or -1 if if crosses, depending on the
-            orientation.
-        """
-
-        p_heq_q0 = q0[1] <= p[1]
-        p_heq_q1 = q1[1] <= p[1]
-        p_left = self._orientation(p, q0, q1)
-
-        if p_heq_q0 and ~p_heq_q1 and p_left > 0:
-            cross = +1
-        elif ~p_heq_q0 and p_heq_q1 and p_left < 0:
-            cross = -1
-        else:
-            cross = 0
-
-        return cross
-
-    #--------------------------------------------------------------------------
-    def _inside_polygon(self, point, polygon):
-        """Test if a point is located within a polygon.
-
-        Parameters
-        ----------
-        point : np.ndarray
-            2D-coordinates of the point.
-        polygon : list of np.ndarray
-            List of the 2D-coordinates of the points that span the polygon.
-
-        Returns
-        -------
-        is_inside : bool
-            True, if the point is located within the polygon. False, otherwise.
-        """
-
-        polygon = np.array(polygon + [polygon[0]])
-
-        winding_number = 0
-
-        for q0, q1 in zip(polygon[0:-1], polygon[1:]):
-            winding_number += self._crossing(point, q0, q1)
-
-        is_inside = winding_number > 0
-
-        return is_inside
-
-    #--------------------------------------------------------------------------
     def _summary_gaps(self, get=False):
         """Get results from the test for gaps, using the radec sampler.
 
@@ -1731,7 +1585,7 @@ class FieldGridTester:
             # iterate through close, rotated points:
             for ra, dec, j in zip(points_ra_rot, points_dec_rot, i_close):
                 # check if point is in field:
-                inside = self._inside_polygon((ra, dec), polygon)
+                inside = inside_polygon((ra, dec), polygon)
 
                 # store results:
                 if inside:

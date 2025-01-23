@@ -1,0 +1,37 @@
+Sr. No,Hour Angle,Declination (in deg),Comments
+1,-00:45,+01:20:00,Instrument-s hits south pier.
+2,-02:00,+00:33:44,Instrument-s hits south pier.
+3,-02:45,+00:27:00,Telescope limit. Instrument-s just clears the south pier.
+4,-03:01,-11:12:44,Telescope limit.
+5,-03:30,-20:00:00,Telescope limit.
+6,-03:30,-22:45:00,Telescope limit.
+7,-03:35,-24:13:30,Telescope limit (instrument just clears floor)
+8,-01:52,-25:20:00,Instrument-e hits floor.
+9,-01:33,-35:28:00,Instrument-e hits floor.
+10,-01:44,-45:30:00,Instrument-e hits the floor.
+11,-02:13,-52:53:00,Instrument-e hits the floor.
+12,-01:35,-55:00:00,Instrument hits the north pier. One of the cameras hits.
+13,-01:20,-57:50:00,Instrument-n hits north pier.
+14,+00:04,-60:00:00,Isttrument w hits north pier.
+15,+00:23,-64:00:00,Instrument-w hits north pier control panel.
+16,+00:50,-64:00,Instrument-w hits the north pier control panel.
+16,+00:50,-85:00,Instrument-w hits the north pier control panel.
+17,+01:42,-74:30:00,Instrument- n hits north-wall behind the north pier.
+18,+02:25,-70:00:00,Instrument- n hits north-wall behind the north pier.
+19,+02:53,-64:21:00,Instrument north hits north-wall behind the north pier.
+20,+03:18,-59:48:05,Instrument east hits the northeast yellow bar and north nearly hits north-wall behind the north pier.
+21,+03:19,-57:10:00,Instrument east hits the northeast yellow bar.
+22,+03:13,-54:24:35,Instrument east hits the northeast yellow bar.
+23,+03:06,-49:40:00,Instrument east hits the northeast yellow bar.
+24,+03:08,-40:00:00,Instrument east hits the northeast yellow bar.
+25,+03:03,-30:11:00,Instrument east hits the northeast yellow bar.
+26,+02:50,-19:38:00,Instrument east hits the northeast yellow bar.
+27,+02:38,-12:22:14,Instrument east hits the east white bracket.
+28,+02:45,-04:17,Instrument east hits the east wall.
+29,+02:25,-00:16:00,Instrument east hits the east wall.
+30,+02:05,+05:34:00,Instrument east hits the east wall.
+31,+01:43,+10:05:00,Instrument east hits the east wall.
+32,+01:28,+14:56:00,Instrument east hits the east wall.
+33,+01:11,+20:00:00,Instrument east hits the east wall and north hits the ladder.
+34,-03:53,-37:31:00,Telescope trap.
+35,-03:30,-37:31:00,Instrument-e hits the floor.

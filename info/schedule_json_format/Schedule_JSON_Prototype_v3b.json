@@ -1,0 +1,44 @@
+{
+  "name": "Schedule name",
+  "date": "YYYY-MM-DD",
+  "pi": "PASIPHAE/name",
+  "mode": "manual/auto",
+  "observer": "U/N of primary observer (will be cross-checked with software login)",
+  "objects": {
+    "name": {
+      "ra": "sexagessimal ra (h)",
+      "dec": "sexagessimal dec (deg)",
+      "guidestar": {
+        "X": 50.0,
+        "Y": 100.,
+        "T": 5.0
+        }
+      }
+    },
+  "targets": [
+    {
+      "target": "name",
+      "type": "target/cal-pol/cal-unpol/etc",
+      "acquisition": [
+        {
+          "guider": {
+            "engage": true
+            },
+          "filter": 2,
+          "hwp": {
+            "engage": true,
+            "continuous": false,
+            "angle": 120.0
+            },
+          "polarizer": {
+            "engage": false
+            },
+          "exposure":{
+            "multiples": 3,
+            "T": 10
+            }
+        }
+      ]
+    }
+  ]
+}

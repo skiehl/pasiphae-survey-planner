@@ -1,0 +1,18 @@
+Sr. No,Hour Angle,Declination (in deg),Comments
+1,-04:00:00,-30:00:00,Telescope limit. Clears floor by 7 cm (measured).
+2,-04:00:00,-20:00:00,Telescope limit. Clears by larger margin than last time.
+3,+02:50:00,+00:00:00,Camera east hits the east wall. Clears south pier.
+4,-04:00:00,+01:00:00,Camera-South grazes south pier with 1 cm clarence. Dec limit of the instrument.
+5,-04:00:00,-40:00:00,Clears the telescope floor by 4 cm. Telescope limit.
+6,-04:00:00,-50:00:00,Telescope limit. Clears floor by 7cm.
+7,-04:00:00,-52:00:00,Telescope limit. Instrument (camera-n) clears north pier  by 1 cm and floor by around 7 cm.
+8,-00:50:00,-60:00:00,Instrument limit. Camera-n and camera-west are in the corner of the north pier.
+9,+00:45:00,-65:00:00,Instrument limit. Camera-w hits the north pier.
+10,+02:45:00,-65:00:00,Instrument limit. Camera-w and n hits the north wall.
+11,+03:10:00,-60:00:00,Instrument limit. Camera-n and west hits the north wall.
+12,+03:10:00,-55:00:00,Instrument limit. Camera-w hits the yellow bar.
+13,+02:50:00,-00:00:00,Instrument limit. Camera- e hits the east wall and bracket of the yellow bar.
+14,+02:50:00,-30:00:00,Hits yellow bar.
+15,+03:00:00,-10:00:00,Hits the east wall if the yellow bar is not there.
+
+

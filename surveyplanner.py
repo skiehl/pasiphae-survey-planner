@@ -2007,6 +2007,9 @@ class SurveyPlanner:
         priorities_joint = np.sum(priorities_joint, axis=0)
         priorities['Joint'] = priorities_joint
 
+        if self.normalize_joint:
+            priorities['Joint'] /= priorities['Joint'].max()
+
         # add priorities to fields:
         print('Add priorities to fields..', end='')
         labels = priorities.keys()
@@ -2267,7 +2270,7 @@ class SurveyPlanner:
         return fields
 
     #--------------------------------------------------------------------------
-    def set_prioritizer(self, *prioritizers, weights=None):
+    def set_prioritizer(self, *prioritizers, weights=None, normalize=False):
         """Set prioritizers.
 
         Parameters
@@ -2281,6 +2284,10 @@ class SurveyPlanner:
             weights are given, priorities are weighted accordingly and then
             summed. The same number of weights must be provided as number of
             prioritizers. The default is None.
+        normalize : bool, optional
+            If True, the joint priorities will be normalized such that the
+            highest priority is 1. Otherwise, the highest priority will be
+            between 0 and 1.
 
         Raises
         ------
@@ -2301,6 +2308,7 @@ class SurveyPlanner:
         print("Set prioritizer(s)..")
         self.prioritizers = {}
         self.weights = {}
+        self.normalize_joint = normalize
 
         # check weights:
         if weights is None:

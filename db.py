@@ -38,20 +38,33 @@ class SQLiteConnection:
     python with-statement."""
 
     #--------------------------------------------------------------------------
-    def __init__(self, db_file):
+    def __init__(self, db_file, wal_mode=True):
         """Create SQLiteConnection instance.
 
         Parameters
         ----------
         db_file : str
             SQLite3 database file name.
+        wal_mode : bool
+            If True, open SQLite connnection with "Write-Ahead Logging" (WAL)
+            mode. Otherwise, uses default rollback journal. WAL mode allows for
+            parallel reading and writing. The default is True.
 
         Returns
         -------
         None
+
+        Notes
+        -----
+        See [1] for details about "Write-Ahead Logging" (WAL).
+
+        References
+        ----------
+        [1] https://www.sqlite.org/wal.html
         """
 
         self.db_file = db_file
+        self.wal_mode = wal_mode
 
     #--------------------------------------------------------------------------
     def __enter__(self):
@@ -64,6 +77,10 @@ class SQLiteConnection:
         """
 
         self.connection = sqlite3.connect(self.db_file)
+
+        if self.wal_mode:
+            self.connection.execute('pragma journal_mode=wal')
+
         self.connection.row_factory = self._dict_factory
 
         return self.connection

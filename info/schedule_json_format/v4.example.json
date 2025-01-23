@@ -1,0 +1,221 @@
+{
+  "objects": [
+    {
+      "guidestar": [
+        {
+          "X": 0,
+          "Y": 52,
+          "T": 5
+        },
+        {
+          "X": 62,
+          "Y": 0,
+          "T": 7
+        }
+      ],
+      "name": "BZUJ1325-4301",
+      "ra": "13:25:27.61",
+      "dec": "-43:01:08.79"
+    },
+    {
+      "name": "BZUJ1632+8232",
+      "ra": "16:32:31.97",
+      "dec": "+82:32:16.4"
+    },
+    {
+      "name": "Hiltner 600",
+      "ra": "06:45:13.33",
+      "dec": "+02:08:14.1"
+    }
+  ],
+  "targets": [
+    {
+      "acquisition": [
+        {
+          "window": {
+            "start": "20:00:00",
+            "end": "06:00:00"
+          },
+          "hwp": {
+            "engage": false,
+            "continuous": false
+          },
+          "polarizer": {
+            "engage": false,
+            "continuous": false
+          },
+          "exposure": {
+            "multiples": 5,
+            "T": 10
+          },
+          "filter": 1,
+          "guider": false
+        },
+        {
+          "window": {
+            "start": "20:00:00",
+            "end": "06:00:00"
+          },
+          "hwp": {
+            "engage": true,
+            "continuous": false,
+            "angle": 0
+          },
+          "polarizer": {
+            "engage": false,
+            "continuous": false
+          },
+          "exposure": {
+            "multiples": 5,
+            "T": 10
+          },
+          "filter": 1,
+          "guider": false
+        },
+        {
+          "window": {
+            "start": "20:00:00",
+            "end": "06:00:00"
+          },
+          "hwp": {
+            "engage": true,
+            "continuous": false,
+            "angle": 22.5
+          },
+          "polarizer": {
+            "engage": false,
+            "continuous": false
+          },
+          "exposure": {
+            "multiples": 5,
+            "T": 10
+          },
+          "guider": false,
+          "filter": 1
+        },
+        {
+          "window": {
+            "start": "20:00:00",
+            "end": "06:00:00"
+          },
+          "hwp": {
+            "engage": true,
+            "continuous": false,
+            "angle": 45
+          },
+          "polarizer": {
+            "engage": false,
+            "continuous": false
+          },
+          "exposure": {
+            "multiples": 5,
+            "T": 10
+          },
+          "guider": false,
+          "filter": 1
+        },
+        {
+          "window": {
+            "end": "06:00:00",
+            "start": "20:00:00"
+          },
+          "hwp": {
+            "engage": true,
+            "continuous": false,
+            "angle": 67.5
+          },
+          "polarizer": {
+            "engage": false,
+            "continuous": false
+          },
+          "exposure": {
+            "multiples": 5,
+            "T": 10
+          },
+          "guider": false,
+          "filter": 1
+        },
+        {
+          "window": {
+            "start": "20:00:00",
+            "end": "06:00:00"
+          },
+          "hwp": {
+            "engage": true,
+            "continuous": false,
+            "angle": 90
+          },
+          "polarizer": {
+            "engage": false,
+            "continuous": false
+          },
+          "exposure": {
+            "multiples": 5,
+            "T": 10
+          },
+          "guider": false,
+          "filter": 1
+        }
+      ],
+      "target": "Hiltner 600",
+      "type": "CAL-UPO"
+    },
+    {
+      "acquisition": [
+        {
+          "window": {
+            "start": "20:00:00",
+            "end": "01:00:00"
+          },
+          "hwp": {
+            "engage": false,
+            "continuous": false
+          },
+          "polarizer": {
+            "engage": false,
+            "continuous": false
+          },
+          "exposure": {
+            "multiples": 5,
+            "T": 120
+          },
+          "guider": true,
+          "filter": 1
+        }
+      ],
+      "target": "BZUJ1325-4301",
+      "type": "PAS"
+    },
+    {
+      "acquisition": [
+        {
+          "window": {
+            "start": "01:00:00",
+            "end": "06:00:00"
+          },
+          "hwp": {
+            "engage": false,
+            "continuous": false
+          },
+          "polarizer": {
+            "engage": false,
+            "continuous": false
+          },
+          "exposure": {
+            "multiples": 120,
+            "T": 5
+          },
+          "guider": false,
+          "filter": 1
+        }
+      ],
+      "target": "BZUJ1632+8232",
+      "type": "PAS"
+    }
+  ],
+  "name": "Test",
+  "date": "2024-08-29",
+  "pi": "Johnny",
+  "mode": "manual",
+  "observer": "HeisenbergK"
+}
